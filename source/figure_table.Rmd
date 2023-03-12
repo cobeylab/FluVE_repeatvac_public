@@ -1,0 +1,1392 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup_load_data,echo = FALSE,message = FALSE,error = FALSE,warning = FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,error = FALSE,warning = FALSE)
+if (!require('here')) install.packages('here'); library('here')
+# load data and model outputs
+#source(here::here("source/data_cleaning.R"))
+load(here::here("data/inputdata.rdata"))
+source(here::here("source/generate_model_outputs.R"))
+```
+
+
+## Main text
+
+#### summary stats quoted in the result section of the manuscript
+
+```{r}
+
+# FluVE stats
+
+cat("Between the 2011-2012 and 2018-2019 seasons, individuals enrolled in the US Flu VE Network contributed 61943 visits, among which", dim(dat_glm)[1], nrow(dat_glm)/61943, "met the inclusion criteria of our analyses. Of those included in our analyses,", sum(table(dat_glm$vac_group11_01))/nrow(dat_glm), "(",sum(table(dat_glm$vac_group11_01)),"/", nrow(dat_glm),") of visits were by individuals who had received one dose of the current seasonal influenza vaccine ≥14 days prior to illness onset date. Among those vaccinated ≥14 days prior to illness onset,", table(dat_glm$vac_group11_01)["1"]/sum(table(dat_glm$vac_group11_01)), "(",table(dat_glm$vac_group11_01)["1"],"/",sum(table(dat_glm$vac_group11_01)),") of visits were by individuals who were vaccinated at least once in the previous season.")
+
+
+# The Marshfield Clinic stats
+
+cat("Surveillance data from the Marshfield Clinic dated back to the 2007-2008 season. In total,",16378#length(unique(dat_m_nofil$studyid)) 
+    ,"individuals were enrolled between the 2007-2008 season and the 2018-2019 season and contributed",24399,
+    #nrow(dat_m_nofil),
+    "visits.")
+
+msm_long_t1_tmp <- msm_long %>% filter(time==1) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    #filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
+    filter( (vd1_WEEK_shift < first_case_week)|is.na(vd1_WEEK_shift))
+
+
+cat(" Among these",length(unique(msm_long_t1_tmp$studyid)),"individuals over 9 seasons (the 2008-2009 season, the 2010-2011 through 2018-2019 seasons) were included in the main analyses that study the impact of clinical infection. These individuals contributed", nrow(msm_long_t1_tmp), "visits.")
+
+
+cat(" Among the",sum(table(msm_long_t1_tmp$vac_group)[c("01","11")]), "current season vaccinees",
+    table(msm_long_t1_tmp$vac_group)[c("11")]/sum(table(msm_long_t1_tmp$vac_group)[c("01","11")]), "(n=", table(msm_long_t1_tmp$vac_group)[c("11")], ")",
+    "were also vaccinated in the previous season, and", 
+    sum(msm_long_t1_tmp %>% filter(vac_group %in% c("01","11"),vac_num_last3 !=0) %>% with(table(vac_num_last3, vac_group)))/sum(table(msm_long_t1_tmp$vac_group)[c("01","11")]), "(n=",
+    sum(msm_long_t1_tmp %>% filter(vac_group %in% c("01","11"),vac_num_last3 !=0) %>% with(table(vac_num_last3, vac_group))),
+    "vaccinated in at least one of the three seasons immediately before the enrollment season.")
+
+
+msm_long_t1_tmp%>%with(table(maari_year_prior, refused_lastyear)) -> tab_tmp
+cat("Among those who presented with acute respiratory symptoms and were eligible for enrollment in the prior season,",tab_tmp[2,2]/sum(tab_tmp[2,])*100, "% (",tab_tmp[2,2],"/",sum(tab_tmp[2,]), ") were enrolled. ")
+
+
+```
+
+#### plot Fig 1： Impact of waning influenza vaccine effectiveness within a season
+
+```{r Fig1, fig.height=8, warning=F}
+
+# fig 1a shows the estimated number of weeks that repeat vaccinees vaccinated earlier 
+# than non-repeats in a season using data across all seasons
+model2_allsites <- glm(CONFIRMED_VAX1_WEEK_shift ~ vac_group11_01 + age_cat_5 + 
+                         P_SEX + ANY_HR_PY + as.factor(SEASON), 
+                       data=dat_glm %>% 
+                mutate(age_cat_5=factor(age_cat_5, levels=c("20-64","0-4","5-9","10-19","65+"))))
+
+# the unadjusted average calendar week of vaccination by repeat vaccination status in each season
+all_seasons <- unique(dat_glm$SEASON)
+output_data <- NULL
+for (each_season in all_seasons){
+  model2 <- glm(CONFIRMED_VAX1_WEEK_shift ~ vac_group11_01, data=dat_glm %>% 
+                mutate(age_cat_5=factor(age_cat_5, levels=c("20-64","0-4","5-9","10-19","65+"))) %>%
+                  filter(SEASON==each_season))
+  
+  coef_index11 <- which(names(coef(model2))=="(Intercept)")
+  coef_indexage <- which(names(coef(model2))=="vac_group11_01")
+  coef <- coef(model2)[coef_index11] + coef(model2)[coef_indexage]
+  se <- deltamethod(as.formula(paste("~x",coef_index11,"+x",coef_indexage, sep="")), 
+                    coef(model2), vcov(model2))
+  
+  tmp_data <- data.frame(coef, low= coef-1.96*se, up=coef+1.96*se, vaccinees=c("rep")) %>% 
+    bind_rows(data.frame(coef=coef(model2)[1],low=confint(model2)[1,1],up=confint(model2)[1,2], vaccinees="non-rep")) %>%
+    mutate(season=each_season)
+
+  output_data <- rbind(output_data, tmp_data)
+}
+
+# plot figure 1a to show that repeat vaccinees vaccinate earlier than non-repeats
+output_data %>%
+  mutate(SEASON_full = case_when(season == 2011 ~ "2011-2012",
+                                 season == 2012 ~ "2012-2013",
+                                 season == 2013 ~ "2013-2014",
+                                 season == 2014 ~ "2014-2015",
+                                 season == 2015 ~ "2015-2016",
+                                 season == 2016 ~ "2016-2017",
+                                 season == 2017 ~ "2017-2018",
+                                 season == 2018 ~ "2018-2019")) %>%
+  mutate(SEASON_full=as.character(SEASON_full))%>%
+  mutate(vaccinees = recode(vaccinees, 
+                            "non-rep"="non-repeat vaccinees","rep"="repeat vaccinees")) %>%
+  ggplot(aes(x = SEASON_full,y = coef, group = vaccinees, color=vaccinees)) + 
+  geom_point(position=position_dodge(width=0.4))+
+  geom_errorbar(aes(x=SEASON_full, ymax=up, ymin=low),width=.1, position=position_dodge(width=0.4)) +
+  theme_bw() + theme(axis.text.x = element_text(angle = 30, hjust=1)) +
+  xlab("seasons") + ylab("calendar week of vaccination") +
+  coord_cartesian(ylim=c(40, 45)) +
+  theme(legend.position = c(.5, .2), legend.background = element_blank(), 
+        legend.title=element_blank())   -> fig1a
+
+# fig 1b compares the estimates of repeat vaccination effect before and after adjusting for timing of vaccination (waning)
+rbind(
+  #bring in data from models not adjusted for waning 
+  get_repvac_OR_wrt01(waning_not_adj_main_output$H1_all_all),
+  get_repvac_OR_wrt01(waning_not_adj_main_output$H3_all_all),
+  get_repvac_OR_wrt01(waning_not_adj_main_output$B_all_all),
+  #bring in data from models adjusted for waning
+  get_repvac_glm_0117(waning_adj_main_output$H1_all_all),
+  get_repvac_glm_0117(waning_adj_main_output$H3_all_all),
+  get_repvac_glm_0117(waning_adj_main_output$B_all_all)
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  data.frame() %>%
+  mutate(subtype = c("H1", "H3", "B","H1", "H3", "B"),
+         model = c("base","base","base","waning","waning","waning")) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=model, color=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  scale_shape_manual(values=c(1,16), name="") + 
+  scale_linetype_manual(values=c(6,1), name="") + 
+  xlab("(sub)types") + 
+  ylab("adjusted odds ratio for infection\namong repeat vaccinees\ncompared w/ non-repeats" ) + 
+  theme_bw() +
+  coord_cartesian(ylim=c(0.6, 1.4)) + 
+  scale_color_manual(labels = c("base models","waning adjusted"), name="models", 
+                     values=c("orange", "red")) + 
+  theme(legend.position = c(.5, .2), legend.background = element_blank(),
+        legend.title = element_blank())   -> fig1b
+
+
+# fig 1c shows waning protection
+rbind(
+  get_waning_glm_0117(waning_adj_main_output$H1_all_all),
+  get_waning_glm_0117(waning_adj_main_output$H3_all_all),
+  get_waning_glm_0117(waning_adj_main_output$B_all_all)
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  data.frame() %>%
+  mutate(weeks_from_vac =  sub(".*cat_", "", rownames(.)),
+         weeks_from_vac = gsub("\\..*","",weeks_from_vac),
+         weeks_from_vac = recode(weeks_from_vac, "18_21"="18-21","2_9"="2-9",
+                                             "10_13"="10-13","14_17"="14-17",
+                                             "22"="22+"),
+         subtype = rep(c("H1", "H3", "B"), each=5)) %>%
+  bind_rows(data.frame(subtype = "B", weeks_from_vac = "unvaccinated",
+                       odds_ratio=1)) %>%
+  bind_rows(data.frame(subtype = "H1", weeks_from_vac = "unvaccinated",
+                       odds_ratio=1)) %>%
+  bind_rows(data.frame(subtype = "H3", weeks_from_vac = "unvaccinated",
+                       odds_ratio=1)) %>%
+  mutate(weeks_from_vac = factor(weeks_from_vac, 
+                                 levels = c("2-9","10-13","14-17",
+                                            "18-21","22+","unvaccinated"))) %>%
+  ggplot(aes(x=weeks_from_vac, y=odds_ratio)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=weeks_from_vac, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  facet_grid(col=vars(subtype)) +
+  scale_shape_manual(values=c(1,16), name="") + 
+  scale_linetype_manual(values=c(6,1), name="") + 
+  xlab("weeks from vaccination") + 
+  ylab("adjusted odds ratio of infection\nwith respect to unvaccinated individuals" ) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust=1)) +
+  coord_cartesian(ylim=c(0, 1)) +
+  theme(legend.position = c(.85, .12), legend.background = element_blank()) + 
+  guides(colour = guide_legend(nrow = 1)) +
+  geom_abline(slope=0,intercept=1, col="black", lty=3) -> fig1c_OR
+
+
+(fig1a + fig1b ) / fig1c_OR  + plot_annotation(tag_levels = 'A')  # 7,7
+```
+
+#### plot Fig2: Impact of clinical infections on the estimated effect of repeated vaccination among participants from the Marshfield Clinic.
+
+```{r Fig2, fig.height=12, warning=F}
+
+#msm_long %>% filter(time==1)  %>% with(table(vd1_WEEK_shift < first_5pct_case_week,year))->tmp
+#tmp[1,]/(tmp[1,]+tmp[2,])*100
+
+## plot fig2a: odds of clinical infection by years since the last clinical infection of the homologous subtype
+rbind( # bring in data
+  get_lastinf_glm(output_glm_mf_lastinf_sametype$H1_base),
+  get_lastinf_glm(output_glm_mf_lastinf_sametype$H3_base), 
+  get_lastinf_glm(output_glm_mf_lastinf_sametype$B_base) 
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up","years_last_inf")) %>%
+  mutate(years_last_inf = recode(years_last_inf, "[0,1)"="not reported",
+                                 "[3,6)"="3-5","[6,15)"="6+"),
+         years_last_inf = factor(years_last_inf, levels=c("1-2","3-5","6+","not reported")),
+         subtype = rep(c("H1","H3","B"),each=3)) %>%
+  bind_rows(data.frame(years_last_inf="1-2", odds_ratio=1, subtype=c("B","H1","H3"))) %>%
+  mutate(odds_ratio = ifelse(subtype=="H1", -100, odds_ratio),
+         low = ifelse(subtype=="H1", -100, low),
+         up = ifelse(subtype=="H1", -100, up)) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=years_last_inf, color=years_last_inf)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  
+  labs(color = "# of seasons since\nthe last clinical\ninfection of the\nhomologous (sub)type")+
+  xlab("(sub)type") +
+  ylab("adjusted odds ratio for clinical\ninfection against each subtype") + 
+  theme_bw() + coord_cartesian(ylim=c(0.5, 55)) -> fig_homo_subtypes_baseonly
+
+
+
+# plot fig2b shows whether individuals (stratified by prior-year vaccination status) with 
+# confirmed infection in a season were more likely to switch vaccination status 
+# in the following season compared with those without confirmed infections.
+
+
+tmp_data <-  msm_long %>% filter(time==1) %>%
+  mutate(vacrecode = ifelse(vac==1&grp!="vac>=inf", 1, ifelse(vac==0,0,2))) %>%
+  mutate(switch = ifelse(vaccinee_nextseason!=vac,1,0)) %>%
+  filter(year!=2019, vacrecode!=2)
+
+# vaccination and age group combined
+lgm_combined <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data)
+# among vaccinees only, all age groups
+lgm_combined_1 <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter((vac==1&grp!="vac>=inf")))
+# among non-vaccinees only, all age groups
+lgm_combined_0 <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter(vac==0))
+
+# combine vac and nonvac in the previous season, results by age
+#lgm_combined_ageint <- glm(switch ~ RES_any*age_cat_5 + HR + gender + as.character(vac_num_last3), 
+#           family = "binomial",  data =  tmp_data )
+#tmpdat1 <- get_se_coef(lgm_combined_ageint)
+#tmpdat3 <- data.frame(vac="all",coef=tmpdat1[[1]],se=tmpdat1[[2]],
+#                      age_group=tmpdat1[[3]])
+
+# by age group and vaccination status
+tmpdat3 <- data.frame(matrix(ncol=4))
+colnames(tmpdat3) <-c("vac","coef","se","age_group")
+for (each_age in unique(tmp_data$age_cat_5)){
+  lgm_combined_ageint_byvac <- glm(switch ~ RES_any*vacrecode + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter(age_cat_5==each_age))
+  tmpdat1 <- get_se_coef2(lgm_combined_ageint_byvac)
+  tmpdat2 <- data.frame(vac=tmpdat1[[3]],coef=tmpdat1[[1]],se=tmpdat1[[2]],
+                        age_group=each_age)
+  tmpdat3 <- bind_rows(tmpdat3, tmpdat2)
+}
+
+# bring in data by age group and vaccination status
+tmpdat3 %>% 
+  mutate(low=coef-1.96*se, up=coef+1.96*se) %>%
+  mutate(age_group = if_else(age_group=="0-4","1-4",age_group)) %>%
+  # nonvaccinated, all age groups
+  bind_rows(data.frame(coef=coef(lgm_combined_0)[2], 
+                  low=confint.default(lgm_combined_0)[2,1], 
+                  up=confint.default(lgm_combined_0)[2,2], 
+                  age_group="all", vac="no")) %>%
+  # vaccinated, all age groups
+  bind_rows(data.frame(coef=coef(lgm_combined_1)[2], 
+                  low=confint.default(lgm_combined_1)[2,1], 
+                  up=confint.default(lgm_combined_1)[2,2], 
+                  age_group="all", vac="yes")) %>%
+  # all combined
+  bind_rows(data.frame(coef=coef(lgm_combined)[2], 
+                       low=confint.default(lgm_combined)[2,1], 
+                       up=confint.default(lgm_combined)[2,2], 
+                       age_group="all", vac="all")) %>%
+  mutate(OR=exp(coef), low=exp(low), up=exp(up),
+         age_group = factor(age_group, levels = c("all","1-4","5-9","10-19","20-64","65+")),
+         vacthisyr=as.character(vac)) %>%
+  mutate(age_group = factor(age_group, levels=c("all","1-4","5-9",
+                                                "10-19","20-64","65+"))) -> switch_dataset
+
+
+switch_dataset %>% 
+  mutate(vacthisyr = factor(vacthisyr, levels=c("no","all","yes"))) %>%
+  filter(vacthisyr != "all") %>%
+  ggplot(aes(x=age_group, y=OR, group=vacthisyr, color=vacthisyr)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=age_group, ymax=up, ymin=low, group=vacthisyr, color=vacthisyr),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  scale_color_manual(labels = c("no","yes"), 
+                    name="vaccinated in the\ncurrent season", 
+                    values=c("orange", "red")) + 
+  xlab("age group") + 
+  ylab("adjusted odds ratio for switching\nvaccination status next season") +
+  theme_bw()  -> fig2b
+
+
+# plot fig 2c: repeat vaccination effect before/after adjusting for clinical infection history
+
+rbind(
+  # bring in output from base models not adjusted prior-season infection
+  get_repvac_OR_wrt01(output_glm_mf$H1),
+  get_repvac_OR_wrt01(output_glm_mf$H3),
+  get_repvac_OR_wrt01(output_glm_mf$B),
+  # bring in output from models that adjust for prior-season infection using inverse-probability weighting
+  get_repvac_glm_0117(output_msm_wanings_5pct$H1_MSM),
+  get_repvac_glm_0117(output_msm_wanings_5pct$H3_MSM),
+  get_repvac_glm_0117(output_msm_wanings_5pct$B_MSM)
+) %>%
+  data.frame() %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  mutate(model = c("glm","glm","glm",
+                   "MSM","MSM","MSM"),
+         subtype = c("H1","H3","B",
+                     "H1","H3","B")) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=model, color=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  labs(color = "model") + xlab("(sub)type") +
+  ylab("adjusted odds ratio for infection\namong repeat vaccinees\ncompared with non-repeats") +
+  theme_bw() +
+  coord_cartesian(ylim=c(0.5, 2)) +
+  scale_color_manual(labels = c("base models\n",
+                                "models adjusted for\nclinical infection history"),
+                     name="models",
+                     values=c("#a6cee3","#1f78b4" )) -> fig2c
+
+
+fig_homo_subtypes_baseonly / fig2b /
+fig2c + plot_annotation(tag_levels = 'A') #+ plot_layout(widths =  7,6
+
+```
+
+#### plot Fig 3
+
+```{r Fig3, fig.height=3.2, fig.width=9}
+
+##' A function that outputs the fraction of non-repeat vaccinees who were subclinically infected in the last season
+##' solve O=((b*alpha+(1-a-b))/(1/gamma_theta-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/gamma_theta-y*alpha-(1-x-y))) for y in Wolfram
+##'
+##' @param b subclinical attack rate among vaccinees
+##' @param a clinical attack rate among vaccinees
+##' @param x clinical attack rate among unvaccinated individuals
+##' @param gamma_theta current season AR among those not infected (clinically or subclinically) last season
+##' @param alpha protection conferred by subclinical infections
+##' @param OR Odds ratio for clinical infection among repeat vaccinees compared with non-repeat vaccinees
+##'
+##' @return y fraction of non-repeat vaccinees who were subclinically infected in the prior season
+##' 
+subcln <- function(alpha, gamma_theta, OR, a=0.01, x=0.02, b){
+ (a* gamma_theta* (OR *(-x) + OR + x - 1) + a + (alpha - 1)* b* (gamma_theta* (OR - 1)* (x - 1) - 1) + gamma_theta - gamma_theta* OR + gamma_theta* OR *x - OR* x + OR - gamma_theta* x - 1)/((alpha - 1) *(gamma_theta* (a - alpha* b + b - 1) + OR *(gamma_theta*  (-(a - alpha* b + b - 1)) - 1)))
+}
+
+## assemble a dataset of y, alpha, OR, and b
+bseq <- seq(0,1,0.01)
+plotdata <- NULL
+for(alpha1 in c(0.3,0.5,0.7)){
+  for(OR1 in seq(0.6,1.4,0.1)){
+    tmp <- subcln(alpha=alpha1, gamma_theta=0.015, OR=OR1, b=bseq, a=0.01, x=0.02)
+    tmpdata <- data.frame(y=tmp,alpha1,OR1,bseq)
+    plotdata <- rbind(tmpdata,plotdata)
+  }
+}
+  
+plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
+  mutate(ratio=y/bseq, diff=y-bseq)
+
+
+
+plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.5,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+  ) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.7,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+  ) %>%
+  mutate(alpha1 = recode(as.character(alpha1), "0.3"="70%", "0.5"="50%", "0.7"="30%")) %>%
+  mutate(OR1 = recode(OR1, "1.1" = "1.1 *")) %>%
+  mutate(OR1 = factor(OR1, levels = c("1.3","1.2","1.1 *","1","0.9","0.8","0.7"))) %>%
+  ggplot(aes(x=bseq, y=y)) + 
+  geom_path(aes(col=OR1, size=OR1)) +
+  scale_size_manual(values = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
+                    name="OR for infection\namong repeat\nvs.non-repeats") +
+  theme_bw() + 
+  facet_grid(col=vars(alpha1)) +
+  scale_color_manual(values = rev(c("#e5f5e0","#c7e9c0","#a1d99b","#74c476","#beaed4","#41ab5d","#238b45")
+), name="OR for infection\namong repeat\nvs.non-repeats") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who were\nsublinically infected previous season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+#plotdata %>% filter(alpha1==0.5, OR1==1.1, bseq==0.2) -> fig4input
+
+```
+
+
+## Supplementary material
+
+#### Stable1
+
+```{r Stable1}
+dat_glm_summ <- dat_glm %>% filter(!is.na(vac_group11_01)) %>% 
+  mutate(RES = factor(RES, levels = c("H1","H3","B"))) %>%
+  mutate(time_VAX_to_ONSET_cat_no26 = factor(time_VAX_to_ONSET_cat_no26, levels = c("2-9","10-13","14-17","18-21","22+"))) 
+
+col_names <- c("x","non-repeat","repeat","non-repeat","repeat","non-repeat","repeat","non-repeat","repeat")
+
+c(as.matrix(dat_glm_summ %>%  with(table(vac_group11_01, RES,useNA = "always")))[1:2,]) -> t_N
+paste("(N=",t_N,")",sep="") -> t_N
+summary_tbl(dat_glm_summ, age_cat_5, vac_group11_01, RES)[1:5,c(1,2,3,5,6,8,9,11,12)] -> t_age
+summary_tbl(dat_glm_summ, P_SEX, vac_group11_01, RES)[1:2,c(1,2,3,5,6,8,9,11,12)] -> t_sex
+t_sex[,1] <- c("female","male") # M=1
+summary_tbl(dat_glm_summ, ANY_HR_PY, vac_group11_01, RES)[1:2,c(1,2,3,5,6,8,9,11,12)] -> t_hr
+t_hr[,1] <- c("no","yes") 
+summary_tbl(dat_glm_summ, time_VAX_to_ONSET_cat_no26, vac_group11_01, RES)[1:5,c(1,2,3,5,6,8,9,11,12)] -> t_vac_onset
+dat_glm_summ %>% group_by(RES, vac_group11_01) %>% summarize(m=mean(CONFIRMED_VAX1_WEEK_shift, na.rm=T)) %>% pull(m) -> t_vax_time
+
+
+kable(rbind(matrix(c("",t_N),nrow=1) %>%`colnames<-`(col_names),
+            setNames(t_age,col_names),
+            setNames(t_sex,col_names),
+            setNames(t_hr,col_names),
+            setNames(t_vac_onset,col_names),
+            matrix(c("",format(t_vax_time, digits=3)), nrow=1) %>%`colnames<-`(col_names)),
+      align = 'c',col.names = NULL) %>%
+  add_header_above(c("", col_names[-1])) %>%
+  add_header_above(.,c(' '=1,'A/H1N1'=2,'A/H3N2'=2,'B'=2,'no known clinical infection'=2),escape = FALSE) %>%
+  #pack_rows("",1,2,label_row_css = "color: #ffffff;") %>%
+  pack_rows("age group", 2, 6) %>%
+  pack_rows("sex", 7, 8) %>%
+  pack_rows("comorbidities", 9, 10) %>%
+  pack_rows("weeks from vaccination to symptom onset", 11, 15) %>%
+  pack_rows("mean calendar week of vaccination",16,16) %>%
+  kable_styling(full_width = F)
+  
+
+```
+
+#### Stable2
+
+```{r Stable2}
+
+msm_long_t1_summ <-  msm_long %>% filter(time==1) %>% 
+  filter(!year %in% c("2008","2009Pan","2010")) %>%
+  filter(!is.na(vac_group11_01)) %>%
+  #  filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift))
+  mutate(RES = factor(RES, levels = c("H1","H3","B")))  %>%
+  mutate(time_VAX_to_ONSET_cat_no26 = factor(time_VAX_to_ONSET_cat_no26, levels = c("2-9","10-13","14-17","18-21","22+"))) %>%
+  mutate(last_infection_cat_BB_2 = factor(last_infection_cat_BB_2, levels=c("[0,1)","[1,3)","[3,6)","[6,15)")),
+         last_infection_cat_H3_2 = factor(last_infection_cat_H3_2, levels=c("[0,1)","[1,3)","[3,6)","[6,15)")),
+         last_infection_cat_H1_2 = factor(last_infection_cat_H1_2, levels=c("[0,1)","[1,3)","[3,6)","[6,15)")))
+
+
+col_names <- c("x","non-repeat","repeat","non-repeat","repeat","non-repeat","repeat","non-repeat","repeat")
+
+c(as.matrix(msm_long_t1_summ %>% with(table(vac_group11_01, RES, useNA = "always")))[1:2,]) -> t_N
+paste("(N=",t_N,")",sep="") -> t_N
+summary_tbl(msm_long_t1_summ, age_cat_5, vac_group11_01, RES)[1:5, c(1,2,3,5,6,8,9,11,12)] -> t_age
+summary_tbl(msm_long_t1_summ, gender, vac_group11_01, RES)[1:2, c(1,2,3,5,6,8,9,11,12)] -> t_sex
+t_sex[,1] <- c("male","female") # M=1
+summary_tbl(msm_long_t1_summ, HR, vac_group11_01, RES)[1:2, c(1,2,3,5,6,8,9,11,12)] -> t_hr
+t_hr[,1] <- c("no","yes")
+summary_tbl(msm_long_t1_summ, time_VAX_to_ONSET_cat_no26, vac_group11_01, RES)[1:5,c(1,2,3,5,6,8,9,11,12)] -> t_vax_onset
+summary_tbl(msm_long_t1_summ %>% mutate(vac_num_last3_new=ifelse(vac_group11_01==1,vac_num_last3-1,vac_num_last3)), vac_num_last3_new, vac_group11_01, RES)[1:3, c(1,2,3,5,6,8,9,11,12)] -> t_last3_vac
+#summary_tbl(msm_long_t1_summ, total_pre_inf, vac_group11_01, RES)
+summary_tbl(msm_long_t1_summ, last_infection_cat_H1_2, vac_group11_01, RES)[1:4,1:3] -> tab_H1
+summary_tbl(msm_long_t1_summ, last_infection_cat_H3_2, vac_group11_01, RES)[1:4,5:6] -> tab_H3
+summary_tbl(msm_long_t1_summ, last_infection_cat_BB_2, vac_group11_01, RES)[1:4,8:9] -> tab_B
+
+msm_long_t1_summ %>% group_by(RES, vac_group11_01) %>% summarize(m=mean(vd1_WEEK_shift, na.rm=T)) %>% pull(m) -> t_vax_time
+
+
+
+kable(rbind(matrix(c("",t_N),nrow=1) %>%`colnames<-`(col_names),
+            setNames(t_age,col_names),
+            setNames(t_sex,col_names),
+            setNames(t_hr,col_names),
+            setNames(t_vax_onset,col_names),
+            setNames(t_last3_vac,col_names),
+            setNames(cbind(tab_H1,tab_H3,tab_B) %>% mutate(C1=c("not reported","1-2","3-5","6+"),.before=H1.0) %>%
+                       slice(2,3,4,1) %>%
+                       select(-1) %>%  mutate(fake1="-",fake2="-"), col_names),
+            matrix(c("",format(t_vax_time, digits=3)), nrow=1) %>%`colnames<-`(col_names)),
+      align = 'c',col.names = NULL) %>%
+  add_header_above(c("", col_names[-1])) %>%
+  add_header_above(.,c(' '=1,'A/H1N1'=2,'A/H3N2'=2,'B'=2,'no known clinical infection'=2),escape = FALSE) %>%
+  #pack_rows("",1,2,label_row_css = "color: #ffffff;") %>%
+  pack_rows("age group", 2, 6) %>%
+  pack_rows("sex", 7, 8) %>%
+  pack_rows("comorbidities", 9, 10) %>%
+  pack_rows("weeks from vaccination to symptom onset", 11, 15) %>%
+  pack_rows("number of seasons one had been vaccinated in the 2 seasons immediately before the previous season",16,18) %>%
+  pack_rows("number of seasons since the last known PCR-confirmed clinical infection of the homologous (sub)type",19,22) %>%
+    pack_rows("mean calendar week of vaccination",23,23) %>%
+  kable_styling(full_width = F)
+  
+
+```
+
+#### SFig1.2: seasonality by subtype
+
+```{r SFig1.2, fig.height=8, eval=F}
+
+dat1_nofil  %>% #filter(RES %in% c("H1","H3","B"))%>% 
+  group_by(ONSET_WEEK_shift, RES, SEASON) %>% summarize(n=n()) %>% ungroup() %>%
+  ggplot(aes(fill=RES, y=n, x=ONSET_WEEK_shift)) + 
+    geom_bar(position="fill", stat="identity") + 
+    facet_grid(vars(SEASON)) + ylab("density") + xlab("calendar week") + labs(color='(sub)type') +
+  theme_bw() -> fig_dominantsubtype
+
+dat1_nofil  %>% filter(RES %in% c("H1","H3","B"))%>% 
+  group_by(ONSET_WEEK_shift, RES, SEASON) %>% summarize(n=n()) %>% ungroup() %>%
+  mutate(SEASON_full = case_when(SEASON == "2010" ~ "2010-2011",
+                          SEASON == "2011" ~ "2011-2012",
+                          SEASON == "2012" ~ "2012-2013",
+                          SEASON == "2013" ~ "2013-2014",
+                          SEASON == "2014" ~ "2014-2015",
+                          SEASON == "2015" ~ "2015-2016",
+                          SEASON == "2016" ~ "2016-2017",
+                          SEASON == "2017" ~ "2017-2018",
+                          SEASON == "2018" ~ "2018-2019")) %>%
+  mutate(SITE="all") %>%
+  ggplot(aes(fill=RES, y=n, x=ONSET_WEEK_shift)) + 
+  geom_bar(position="stack", stat="identity") + 
+  facet_grid(row=vars(SEASON_full), col=vars(SITE)) + ylab("counts") + xlab("calendar week") +
+  labs(fill="(sub)type") + ylab("number of cases") +
+  theme_bw() +
+  scale_x_continuous(breaks = c(50, 57, 62, 67), label = c(50, 5, 10, 15)
+                     ) -> fig_seasonality_combined
+
+
+dat1_nofil  %>% filter(RES %in% c("H1","H3","B"))%>% 
+  group_by(ONSET_WEEK_shift, RES, SEASON, SITE) %>% summarize(n=n()) %>% ungroup() %>%
+  mutate(SEASON_full = case_when(SEASON == "2010" ~ "2010-2011",
+                          SEASON == "2011" ~ "2011-2012",
+                          SEASON == "2012" ~ "2012-2013",
+                          SEASON == "2013" ~ "2013-2014",
+                          SEASON == "2014" ~ "2014-2015",
+                          SEASON == "2015" ~ "2015-2016",
+                          SEASON == "2016" ~ "2016-2017",
+                          SEASON == "2017" ~ "2017-2018",
+                          SEASON == "2018" ~ "2018-2019")) %>%
+  ggplot(aes(fill=RES, y=n, x=ONSET_WEEK_shift)) + 
+  geom_bar(position="stack", stat="identity") + 
+  facet_grid(row=vars(SEASON_full), col=vars(SITE)) + ylab("counts") + xlab("calendar week") +
+  labs(fill="(sub)type") + ylab("number of cases") +
+  theme_bw() +
+  scale_x_continuous(breaks = c(50, 57, 62, 67), label = c(50, 5, 10, 15)
+                     ) -> fig_seasonality_site
+
+ggarrange(fig_seasonality_combined, fig_seasonality_site, widths = c(1,4),
+          common.legend = T)
+
+```
+
+#### SFig2.1: Waning vaccine protection by subtype, season, and site.
+
+```{r, sFig2.1, fig.height=15}
+
+plot_waning_byseasonsite <- function(fig_subtype){
+  # get all model output for a subtype (H1/H3/B)
+  choose_elements <- grepl(fig_subtype, names(waning_adj_main_output))
+  # extract all OR estimates
+  lapply(waning_adj_main_output[choose_elements], get_waning_glm_0117) -> ext_dat
+  # clean data and plot now
+  data.frame(list.rbind(ext_dat)) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  mutate(name = rep(names(ext_dat), each=nrow(ext_dat[[1]]))) %>%
+  separate(name, c("subtype", "site", "season")) %>%
+  mutate(weeks_from_vac =  sub(".*cat_", "", rownames(.))) %>%
+  mutate(weeks_from_vac =  sub("\\..*", "", weeks_from_vac)) %>%
+  # add the reference groups
+  bind_rows(expand.grid(subtype = fig_subtype, 
+                        site = c("all", "MI", "PA", "TX", "WA", "WI"),
+                        season = c(2011:2018,"all"),
+                        weeks_from_vac = "unvacc",
+                        odds_ratio=1)) %>%
+  # format variables
+  mutate(weeks_from_vac = recode(weeks_from_vac, "2_9" = "2-9", 
+                             "10_13" = "10-13", 
+                             "14_17" = "14-17",
+                             "18_21" = "18-21",
+                             "22" = "22+")) %>%
+  mutate(weeks_from_vac = factor(weeks_from_vac, 
+                            levels = c("2-9","10-13","14-17","18-21",
+                                       "22+","unvacc"))) %>%
+  # add id for the dominant subtype each season
+  left_join(filter_type_by_season, by=c("season"="SEASON")) %>%
+    mutate(epidemics = ifelse(subtype==B_year|subtype==H3N2_dom|
+                                (H3N2_dom=="both"&subtype!="B")|season=="all",
+                              "subtype dominant or\npooled across seasons","non-dominant seasons"),
+           epidemics = replace_na(epidemics,"non-dominant seasons")) %>%
+    mutate(season = case_when(season == "2011" ~ "2011-2012",
+                              season == "2012" ~ "2012-2013",
+                              season == "2013" ~ "2013-2014",
+                              season == "2014" ~ "2014-2015",
+                              season == "2015" ~ "2015-2016",
+                              season == "2016" ~ "2016-2017",
+                              season == "2017" ~ "2017-2018",
+                              season == "2018" ~ "2018-2019",
+                              season == "all" ~ "all")) %>%
+  ggplot(aes(x=weeks_from_vac,y=odds_ratio)) +
+  geom_point(position=position_dodge(width=0.5), 
+             aes(shape=epidemics, color=epidemics)) +
+  geom_errorbar(aes(x=weeks_from_vac, ymax=up, ymin=low, lty=epidemics,
+                    color=epidemics),
+                    width=.1, position=position_dodge(width=0.5)) +
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  facet_grid(vars(site), vars(season)) +
+  coord_cartesian(ylim=c(0, 1.05)) + 
+  xlab("subtype") + 
+    ylab(paste("adjusted OR of clinical infection with", fig_subtype, sep=" ") ) +
+  scale_linetype_manual(values=c(6,1)) +
+  scale_shape_manual(values=c(1,16)) +
+  scale_colour_manual(values=c("grey","black")) +
+  theme_bw() + rremove("xlab") + 
+  theme(axis.text.x = element_text(angle = 45, hjust=1),legend.position = "bottom") 
+}
+
+ggarrange(plot_waning_byseasonsite("H1"), 
+          plot_waning_byseasonsite("H3"),
+          plot_waning_byseasonsite("B"), 
+          nrow=3, labels=c("A","B", "C"), legend = "bottom", common.legend = T) #13,9
+
+```
+
+#### SFig2.2: Estimated effect of repeated vaccination by age group
+
+```{r SFig2.2, fig.height=3.3, fig.width=6}
+# BASE MODEL
+output <- NULL
+for (age_group_i in unique(dat_glm$age_cat_5)){
+  for (var in c("RES_B", "RES_H1", "RES_H3")){
+    var_index <- which(names(dat_glm) == var)
+    dat_index <- dat_glm[,var_index] <=1
+    model <- glm(as.formula(paste(var, "~ vac_group + P_SEX + ANY_HR_PY +
+                                    factor(months_from_season_start) + as.factor(SEASON) + as.factor(SITE)")),
+                 family="binomial",
+                 data = dat_glm[dat_index,] %>% filter(age_cat_5 == age_group_i))
+    # get coef showing repeat vaccination effect
+    tmp <- get_repvac_OR_wrt01(model)
+    tmp <- c(tmp, substr(var,5,8), age_group_i)
+    output <- rbind(output, tmp)
+  }
+}
+output_all_glm <- data.frame(output) %>%
+    `colnames<-`(c("odds_ratio","low","up","subtype","age")) %>%
+    mutate(model = "base")
+
+
+# adjusted for waning
+output_repeat_waning <- NULL
+output_dur_waning <- NULL
+for (age_group_i in unique(dat_glm$age_cat_5)){
+  for (var in c("RES_B", "RES_H1", "RES_H3")){
+    var_index <- which(names(dat_glm) == var)
+    dat_index <- dat_glm[,var_index] <= 1
+    model <- glm(as.formula(paste(var, "~ P_SEX + ANY_HR_PY + vac_group11 + vac_group10 + 
+                                      time_VAX_to_ONSET_cat_2_9 + time_VAX_to_ONSET_cat_10_13 + 
+                                      time_VAX_to_ONSET_cat_14_17 + time_VAX_to_ONSET_cat_18_21 +
+                                      time_VAX_to_ONSET_cat_22 +
+                                      as.factor(months_from_season_start) + as.factor(SEASON) + as.factor(SITE)")),
+                 family="binomial",
+                 data = dat_glm[dat_index,] %>% filter(age_cat_5 == age_group_i))
+    tmp1 <- c(get_repvac_glm_0117(model),  substr(var,5,8), "all", "all", "waning", age_group_i)
+    tmp2 <- get_waning_glm_0117(model) %>% data.frame() %>%
+            `colnames<-`(c("odds_ratio","low","up")) %>%
+            mutate(subtype = substr(var,5,8)) %>%
+            mutate(weeks_from_vac =  sub(".*cat_", "", rownames(.))) %>%
+            mutate(season = "all", site = "all", model = "waning", age=age_group_i)
+    output_repeat_waning <- rbind(output_repeat_waning, tmp1)
+    output_dur_waning <- rbind(output_dur_waning, tmp2)
+  }
+}
+
+output_repeat_waning %>% data.frame() %>%
+  `colnames<-`(c("odds_ratio","low","up","subtype","season","site","model","age")) %>%
+  bind_rows(output_all_glm) %>%
+  mutate(age = recode(age, "0-4"="1-4")) %>%
+  mutate(odds_ratio = as.numeric(odds_ratio), low=as.numeric(low), up=as.numeric(up),
+         age = factor(age, levels=c("1-4","5-9","10-19","20-64","65+"))) %>%
+  ggplot(aes(x=age, y=odds_ratio, group=model, color=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=age, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  facet_grid(col=vars(subtype)) +
+  scale_shape_manual(values=c(1,16), name="") + 
+  scale_linetype_manual(values=c(6,1), name="") + 
+  xlab("age group") + 
+  ylab("adjusted odds ratio for clinical\ninfection among repeat vaccinees\ncompared with non-repeat vaccinees" ) +
+  theme_bw() +
+  theme(legend.background = element_blank()) +
+  scale_color_manual(labels = c("base models","waning adjusted"), name="models", 
+                     values=c("orange", "red")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position = "bottom", legend.background = element_blank()) 
+
+
+# 
+# output_dur_waning %>% 
+#   mutate(odds_ratio = as.numeric(odds_ratio), low=as.numeric(low), up=as.numeric(up),
+#          age = factor(age, levels=c("0-4","5-9","10-19","20-64","65+"))) %>%
+#   mutate(weeks_from_vac = recode(weeks_from_vac, "18_21"="18-21","2_9"="2-9",
+#                                                  "10_13"="10-13","14_17"="14-17",
+#                                                  "22"="22+")) %>%
+#   mutate(weeks_from_vac = factor(weeks_from_vac, 
+#                                 levels = c("2-9","10-13","14-17","18-21","22+","unvaccinated"))) %>%
+#   ggplot(aes(x=subtype, y=odds_ratio, group=weeks_from_vac, color=weeks_from_vac)) +
+#   geom_point(position=position_dodge(width=0.5)) +
+#   geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+#                     width=.1, position=position_dodge(width=0.5))+
+#   geom_hline(yintercept=1, lty=2, color="darkgrey") +
+#   facet_grid(col=vars(age)) +
+#   xlab("(sub)type") + 
+#   ylab("adjusted odds ratio for clinical infection with\nrespect to those unvaccinated this season" ) +
+#   theme_bw() +
+#   theme(legend.position = "bottom", legend.background = element_blank())
+
+```
+
+#### SFig2.3: fig showing repeat vaccination effect by season and site
+
+```{r sfig2.3}
+
+# get all model output related to H3
+choose_elements <- grepl("H3", names(waning_adj_main_output))
+# extract VE estimates
+lapply(waning_adj_main_output[choose_elements], get_repvac_glm_0117) -> ext_dat_H3
+
+
+
+
+# get all model output related to H1
+choose_elements <- grepl("H1", names(waning_adj_main_output))
+# extract VE estimates
+lapply(waning_adj_main_output[choose_elements], get_repvac_glm_0117) -> ext_dat_H1
+
+
+
+# get all model output related to B
+choose_elements <- grepl("B", names(waning_adj_main_output))
+# extract VE estimates
+lapply(waning_adj_main_output[choose_elements], get_repvac_glm_0117) -> ext_dat_B
+
+
+# no waning
+# get all model output related to H3
+choose_elements <- grepl("H3", names(waning_not_adj_main_output))
+# extract VE estimates
+lapply(waning_not_adj_main_output[choose_elements], get_repvac_OR_wrt01) -> ext_dat_H3_nowan
+
+
+# get all model output related to H1
+choose_elements <- grepl("H1", names(waning_not_adj_main_output))
+# extract VE estimates
+lapply(waning_not_adj_main_output[choose_elements], get_repvac_OR_wrt01) -> ext_dat_H1_nowan
+
+
+# get all model output related to B
+choose_elements <- grepl("B", names(waning_not_adj_main_output))
+# extract VE estimates
+lapply(waning_not_adj_main_output[choose_elements], get_repvac_OR_wrt01) -> ext_dat_B_nowan
+
+
+data.frame(list.rbind(ext_dat_H3)) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  mutate(name = rep(names(ext_dat_H3), each=nrow(ext_dat_H3[[1]])),
+         subtype="H3",
+         waning="yes") %>%
+  separate(name, c("subtype", "site", "season")) %>%
+  bind_rows(
+    data.frame(list.rbind(ext_dat_H1)) %>%
+      `colnames<-`(c("odds_ratio","low","up")) %>%
+      mutate(name = rep(names(ext_dat_H1), each=nrow(ext_dat_H1[[1]])),
+             subtype="H1",
+             waning="yes") %>%
+      separate(name, c("subtype", "site", "season")) 
+  ) %>%
+  bind_rows(
+    data.frame(list.rbind(ext_dat_B)) %>%
+      `colnames<-`(c("odds_ratio","low","up")) %>%
+      mutate(name = rep(names(ext_dat_B), each=nrow(ext_dat_B[[1]])),
+             subtype="B",
+             waning="yes") %>%
+      separate(name, c("subtype", "site", "season")) 
+  ) %>%
+  bind_rows(
+    data.frame(list.rbind(ext_dat_B_nowan)) %>%
+      `colnames<-`(c("odds_ratio","low","up")) %>%
+      mutate(name = rep(names(ext_dat_B_nowan), each=nrow(ext_dat_B_nowan[[1]])),
+             subtype="B",
+             waning="no") %>%
+      separate(name, c("subtype", "site", "season")) 
+  ) %>%
+  bind_rows(
+    data.frame(list.rbind(ext_dat_H3_nowan)) %>%
+      `colnames<-`(c("odds_ratio","low","up")) %>%
+      mutate(name = rep(names(ext_dat_H3_nowan), each=nrow(ext_dat_H3_nowan[[1]])),
+             subtype="H3",
+             waning="no") %>%
+      separate(name, c("subtype", "site", "season")) 
+  ) %>%
+  bind_rows(
+    data.frame(list.rbind(ext_dat_H1_nowan)) %>%
+      `colnames<-`(c("odds_ratio","low","up")) %>%
+      mutate(name = rep(names(ext_dat_H1_nowan), each=nrow(ext_dat_H1_nowan[[1]])),
+             subtype="H1",
+             waning="no") %>%
+      separate(name, c("subtype", "site", "season")) 
+  ) %>%
+  
+  left_join(filter_type_by_season, by=c("season"="SEASON")) %>%
+    mutate(epidemics = ifelse(subtype==B_year|subtype==H3N2_dom|(H3N2_dom=="both"&subtype!="B")|season=="all",
+                              "subtype dominant or\npooled across seasons","non-dominant seasons"),
+           epidemics = replace_na(epidemics,"non-dominant seasons")) %>%
+    mutate(season = case_when(season == "2011" ~ "2011-2012",
+                              season == "2012" ~ "2012-2013",
+                              season == "2013" ~ "2013-2014",
+                              season == "2014" ~ "2014-2015",
+                              season == "2015" ~ "2015-2016",
+                              season == "2016" ~ "2016-2017",
+                              season == "2017" ~ "2017-2018",
+                              season == "2018" ~ "2018-2019",
+                              season == "2019" ~ "2019-2020",
+                              season == "all" ~ "all")) %>%
+  ggplot(aes(x=season, y=odds_ratio, group=waning, color=waning)) +
+  geom_point(position=position_dodge(width=0.5), aes(shape=epidemics)) +
+  geom_errorbar(aes(x=season, ymax=up, ymin=low, lty=epidemics),
+                    width=.1, position=position_dodge(width=0.5)) +
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  facet_grid(vars(site),vars(subtype)) +
+  coord_cartesian(ylim=c(0.5, 2)) + 
+  labs(color = "waning adjusted") + xlab("subtype") + ylab("adjust odds ratio for clinical infection\ncomparing repeat with non-repeat vaccinees") +
+  scale_linetype_manual(values=c(6,1)) +
+  scale_shape_manual(values=c(1,16)) +
+  theme_bw() + rremove("xlab") + 
+  theme(axis.text.x = element_text(angle = 45, hjust=1),legend.position = "bottom") -> sfig2_3
+```
+
+#### SFig2.4: Impact of waning protection before and after excluding individuals vaccinated after the start of a season
+
+```{r SFig2.4}
+
+rbind(
+  get_waning_glm_0117(waning_adj_main_output_ray$H1_all_all),
+  get_waning_glm_0117(waning_adj_main_output_ray$H3_all_all),
+  get_waning_glm_0117(waning_adj_main_output_ray$B_all_all),
+  get_waning_glm_0117(waning_adj_main_output$H1_all_all),
+  get_waning_glm_0117(waning_adj_main_output$H3_all_all),
+  get_waning_glm_0117(waning_adj_main_output$B_all_all)) %>% data.frame() %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  mutate(weeks_from_vac =  sub(".*cat_", "", rownames(.)),
+         weeks_from_vac = gsub("\\..*","",weeks_from_vac),
+         weeks_from_vac = recode(weeks_from_vac, "18_21"="18-21","2_9"="2-9",
+                                             "10_13"="10-13","14_17"="14-17",
+                                             "22"="22+"),
+         subtype = rep(rep(c("H1", "H3", "B"), each=5),2),
+         exclude = rep(c("yes","no"), each=15)) %>%
+  bind_rows(expand.grid(subtype = c("B","H1","H3"), 
+                        weeks_from_vac = "unvacc",
+                        odds_ratio=1,
+                        exclude=c("yes","no"))) %>%
+  mutate(weeks_from_vac = factor(weeks_from_vac,
+                                 levels = c("2-9","10-13","14-17",
+                                            "18-21","22+","unvacc"))) %>%
+  ggplot(aes(x=weeks_from_vac, y=odds_ratio, group=exclude, lty=exclude)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x = weeks_from_vac, ymax = up, ymin = low),
+                    width=.1, position=position_dodge(width=0.5)) +
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  facet_grid(col=vars(subtype)) +
+  scale_linetype_manual(values=c(1,6), name="") +
+  xlab("weeks from vaccination") +
+  ylab("adjusted OR of infection" ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  coord_cartesian(ylim=c(0, 1)) +
+  scale_color_manual(labels = c("no", "yes"), name="repeat vaccinees",
+                     values=c("red", "black")) +
+  theme(legend.position = "none") +
+  guides(colour = guide_legend(nrow = 1)) -> figs1a_OR
+
+
+rbind(
+  # #bring in data from models not adjusted for waning VE
+  # get_repvac_OR_wrt01(waning_not_adj_main_output_ray$H1_all_all),
+  # get_repvac_OR_wrt01(waning_not_adj_main_output_ray$H3_all_all),
+  # get_repvac_OR_wrt01(waning_not_adj_main_output_ray$B_all_all),
+  #bring in data from models adjusted for waning VE
+  get_repvac_glm_0117(waning_adj_main_output$H1_all_all),
+  get_repvac_glm_0117(waning_adj_main_output$H3_all_all),
+  get_repvac_glm_0117(waning_adj_main_output$B_all_all),
+  #bring in data from models adjusted for waning VE after excluding data
+  get_repvac_glm_0117(waning_adj_main_output_ray$H1_all_all),
+  get_repvac_glm_0117(waning_adj_main_output_ray$H3_all_all),
+  get_repvac_glm_0117(waning_adj_main_output_ray$B_all_all)
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  data.frame() %>%
+  mutate(subtype = c(#"H1", "H3", "B",
+                     "H1", "H3", "B","H1", "H3", "B"),
+         model = c(#"sensitivity analysis","sensitivity analysis","sensitivity analysis",
+                   "main analysis","main analysis","main analysis",
+                   "sensitivity analysis","sensitivity analysis","sensitivity analysis")) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=model, lty=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  scale_linetype_manual(values=c(1,6), name="") + 
+  xlab("(sub)type") + 
+  ylab("adjusted odds ratio for infection among repeat\n vaccinees compared w/ non-repeat vaccinees" ) + 
+  theme_bw() +
+  coord_cartesian(ylim=c(0.6, 1.4)) + 
+  theme(legend.position = c(.5, .2), legend.background = element_blank())   -> figs1b
+
+
+dat_glm %>% group_by(time_VAX_to_ONSET) %>% summarise(nMAIN=n())  %>% 
+  left_join(dat_glm %>% 
+              filter( (CONFIRMED_VAX1_WEEK_shift < first_case_week)|
+                        is.na(CONFIRMED_VAX1_WEEK_shift)) %>% 
+              group_by(time_VAX_to_ONSET) %>% 
+              summarise(nPOST=n()), by="time_VAX_to_ONSET") %>%
+  mutate(dataset="after the start of a season") %>%
+  mutate(n = nMAIN-nPOST) %>% 
+  bind_rows(dat_glm %>% 
+              filter( (CONFIRMED_VAX1_WEEK_shift < first_case_week)|
+                        is.na(CONFIRMED_VAX1_WEEK_shift)
+                      ) %>% 
+              group_by(time_VAX_to_ONSET) %>% 
+              summarise(n=n()) %>% 
+              mutate(dataset="before the start of a season")) %>%
+  select(time_VAX_to_ONSET,n, dataset) %>%
+  ggplot(aes(fill=dataset, y=n, x=time_VAX_to_ONSET)) + 
+  geom_bar(position="stack", stat="identity") + 
+  xlab("weeks from vaccination to symptom onset") + ylab("# vaccinees") +
+  scale_fill_manual(values=c("black","darkgrey"), 
+                    name="time of vaccination") + theme_bw() +
+  theme(legend.position = c(0.85, 0.6), 
+        legend.background = element_rect(fill = "transparent"))  -> vactime
+
+(figs1a_OR + figs1b + plot_layout(widths = c(2,1))) / vactime  + plot_layout(heights = c(2,1)) + plot_annotation(tag_levels = 'A')  # 6,10
+
+```
+
+#### sFig3.2: similar to fig2a: odds of infection by years since the last clinical infection of the heterologous subtype
+
+```{r SFig3.2, fig.width=5,fig.height=3}
+
+# plot odds of infection by years since last clinical infection of the heterologous subtype
+rbind(
+  get_lastinf_glm_neg(output_glm_mf_lastinf_heterotype$H1_base),
+  get_lastinf_glm_neg(output_glm_mf_lastinf_heterotype$H3_base), 
+  get_lastinf_glm_neg(output_glm_mf_lastinf_heterotype$B_base) 
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up","years_last_inf")) %>%
+  mutate(years_last_inf = recode(years_last_inf, "[0,1)"="not reported",
+                                 "[3,6)"="3-5","[6,15)"="6+"),
+         years_last_inf = factor(years_last_inf, levels=c("1-2","3-5","6+","not reported")),
+         subtype = rep(c("H1","H3","B"),each=3)) %>%
+  bind_rows(data.frame(years_last_inf="1-2",
+                       odds_ratio=1, subtype=c("B","H1","H3")))  %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=years_last_inf, color=years_last_inf)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  labs(color = "# of seasons since\nthe last clinical\ninfection of the\nheterologous (sub)type") +
+  xlab("(sub)type") + 
+  ylab("adjusted odds ratio for clinical\ninfection against each subtype") + 
+  theme_bw() + coord_cartesian(ylim=c(0, 2.5)) -> fig_hetero_subtypes_baseonly #3,5
+
+
+fig_hetero_subtypes_baseonly
+```
+
+#### SFig3.3: generate figure 2 after excluding those who presented with acute respiratory illness but refused enrollment in the previous season
+
+```{r SFig3.3, fig.height=10}
+
+rbind(
+  get_lastinf_glm(output_glm_mf_lastinf_sametype_refused_incl$H1_base),
+  get_lastinf_glm(output_glm_mf_lastinf_sametype_refused_incl$H3_base), 
+  get_lastinf_glm(output_glm_mf_lastinf_sametype_refused_incl$B_base) 
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up","years_last_inf")) %>%
+  mutate(years_last_inf = recode(years_last_inf, "[0,1)"="not reported",
+                                 "[3,6)"="3-5","[6,15)"="6+"),
+         years_last_inf = factor(years_last_inf, levels=c("1-2","3-5","6+","not reported")),
+         subtype = rep(c("H1","H3","B"),each=3)) %>%
+  bind_rows(data.frame(years_last_inf="1-2", odds_ratio = 1, subtype = c("B","H1","H3"))) %>%
+  mutate(odds_ratio = ifelse(subtype == "H1", -100, odds_ratio),
+         low = ifelse(subtype == "H1", -100, low),
+         up = ifelse(subtype == "H1", -100, up)) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=years_last_inf, color=years_last_inf)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  labs(color = "# of seasons since\nthe last clinical\ninfection of the\n homologous (sub)type") +
+  xlab("(sub)type") + 
+  ylab("adjusted odds ratio for clinical\ninfection against each subtype") + 
+  theme_bw() + coord_cartesian(ylim=c(0.5, 55)) -> fig_homo_subtypes_baseonly_del_ref_enr
+
+
+## more likely to switch vaccination status after infection? 
+tmp_data <-  msm_long %>% filter(time==1)  %>% #filter(refused_eligible!=1) %>%
+  mutate(refused_lastyear = replace_na(refused_lastyear, 4)) %>%
+    filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
+  mutate(vacrecode = ifelse(vac==1&grp!="vac>=inf", 1, ifelse(vac==0,0,2))) %>%
+  mutate(switch = ifelse(vaccinee_nextseason!=vac,1,0)) %>%
+  filter(year!=2019, vacrecode!=2)
+
+# vaccination and age group combined
+lgm_combined <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data)
+# vaccinees only, all age groups
+lgm_combined_1 <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter((vac==1&grp!="vac>=inf")))
+# non-vaccinees only, all age groups
+lgm_combined_0 <- glm(switch ~ RES_any +  age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter(vac==0))
+
+# combine vac and nonvac in the previous season, results by age
+lgm_combined_ageint <- glm(switch ~ RES_any*age_cat_5 + HR + gender + as.character(vac_num_last3), 
+           family = "binomial",  data =  tmp_data )
+tmpdat1 <- get_se_coef(lgm_combined_ageint)
+tmpdat3 <- data.frame(vac="all",coef=tmpdat1[[1]],se=tmpdat1[[2]],
+                      age_group=tmpdat1[[3]])
+
+# by age group and vaccination status
+for (each_age in unique(tmp_data$age_cat_5)){
+  lgm_combined_ageint_byvac <- glm(switch ~ RES_any*vacrecode + HR + gender + as.character(vac_num_last3), 
+           family = "binomial", data =  tmp_data %>% filter(age_cat_5==each_age))
+  tmpdat1 <- get_se_coef2(lgm_combined_ageint_byvac)
+  tmpdat2 <- data.frame(vac=tmpdat1[[3]],coef=tmpdat1[[1]],se=tmpdat1[[2]],
+                        age_group=each_age)
+  tmpdat3 <- bind_rows(tmpdat3, tmpdat2)
+}
+
+tmpdat3 %>% 
+  mutate(low=coef-1.96*se, up=coef+1.96*se) %>%
+  mutate(age_group = if_else(age_group=="0-4","1-4",age_group)) %>%
+  # non-vaccinated, all age groups combined
+  bind_rows(data.frame(coef=coef(lgm_combined_0)[2], 
+                  low=confint.default(lgm_combined_0)[2,1], 
+                  up=confint.default(lgm_combined_0)[2,2], 
+                  age_group="all", vac="no")) %>%
+  # vaccinated, all age groups combined
+  bind_rows(data.frame(coef=coef(lgm_combined_1)[2], 
+                  low=confint.default(lgm_combined_1)[2,1], 
+                  up=confint.default(lgm_combined_1)[2,2], 
+                  age_group="all", vac="yes")) %>%
+  # everyone combined
+  bind_rows(data.frame(coef=coef(lgm_combined)[2], 
+                       low=confint.default(lgm_combined)[2,1], 
+                       up=confint.default(lgm_combined)[2,2], 
+                       age_group="all", vac="all")) %>%
+  mutate(OR=exp(coef), low=exp(low), up=exp(up),
+         age_group = factor(age_group, levels = c("all","1-4","5-9","10-19","20-64","65+")),
+         vacthisyr=as.character(vac)) %>%
+  mutate(age_group = factor(age_group, levels=c("all","1-4","5-9",
+                                                "10-19","20-64","65+"))) %>% 
+  mutate(vacthisyr = factor(vacthisyr, levels=c("no","all","yes"))) %>%
+  filter(vacthisyr!="all") %>%
+  ggplot(aes(x=age_group, y=OR, group=vacthisyr, color=vacthisyr)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=age_group, ymax=up, ymin=low, group=vacthisyr, color=vacthisyr),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  scale_color_manual(labels = c("no","yes"), 
+                    name="vaccinated in the\ncurrent season", 
+                    values=c("orange","red")) + 
+  xlab("age group") + 
+  ylab("adjusted odds ratio for switching\nvaccination status next season") +
+  theme_bw()  -> f2_del_ref_enr
+
+rbind(
+  # bring in output from the base model
+  get_repvac_OR_wrt01(output_glm_mf_refused_incl$H1),
+  get_repvac_OR_wrt01(output_glm_mf_refused_incl$H3),
+  get_repvac_OR_wrt01(output_glm_mf_refused_incl$B),
+  # bring in output that adjusted for prior-season clinical infection using inverse-probability weighting
+  get_repvac_glm_0117(output_msm_wanings_refused_incl$H1_MSM),
+  get_repvac_glm_0117(output_msm_wanings_refused_incl$H3_MSM),
+  get_repvac_glm_0117(output_msm_wanings_refused_incl$B_MSM)
+) %>%
+  data.frame() %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  mutate(model = c("glm","glm","glm",
+                   "MSM","MSM","MSM"),
+         subtype = c("H1","H3","B",
+                     "H1","H3","B")) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, group=model, color=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5)) +
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  labs(color = "model") + xlab("(sub)type") +
+  ylab("adjusted odds ratio for infection\namong repeat vaccinees\ncompared with non-repeats") +
+  theme_bw() +
+  coord_cartesian(ylim=c(0.5, 2)) +
+  scale_color_manual(labels = c("base models\n",
+                                "models adjusted for\nclinical infection history"),
+                     name="models",
+                     values=c("#a6cee3","#1f78b4","#b2df8a")) -> fig2c_del_ref_enr
+
+
+fig_homo_subtypes_baseonly_del_ref_enr / f2_del_ref_enr /
+fig2c_del_ref_enr + plot_annotation(tag_levels = 'A') #+ plot_layout(widths = c(6, 1), heights = c(3,10)) 7,6
+```
+
+#### SFig3.4 aOR for clinical infection comparing repeat and non-repeat before and after adjusting for waning protection in the weighted outcome models
+
+```{r SFig3.4, fig.width=4, fig.height=3}
+rbind(
+  #bring in data from models not adjusted for waning VE
+  get_repvac_OR_wrt01(output_msm_nowanings_5pct$H1_MSM),
+  get_repvac_OR_wrt01(output_msm_nowanings_5pct$H3_MSM),
+  get_repvac_OR_wrt01(output_msm_nowanings_5pct$B_MSM),
+  #bring in data from models adjusted for waning VE
+  get_repvac_glm_0117(output_msm_wanings_5pct$H1_MSM),
+  get_repvac_glm_0117(output_msm_wanings_5pct$H3_MSM),
+  get_repvac_glm_0117(output_msm_wanings_5pct$B_MSM)
+  ) %>%
+  `colnames<-`(c("odds_ratio","low","up")) %>%
+  data.frame() %>%
+  mutate(subtype = c("H1", "H3", "B",
+                     "H1", "H3", "B"),
+         model = rep(c("no waning", "waning"), each=3)) %>%
+  ggplot(aes(x=subtype, y=odds_ratio, color=model)) +
+  geom_point(position=position_dodge(width=0.5)) +
+  geom_errorbar(aes(x=subtype, ymax=up, ymin=low),
+                    width=.1, position=position_dodge(width=0.5))+
+  geom_hline(yintercept=1, lty=2, color="darkgrey") +
+  scale_shape_manual(values=c(1,16), name="") + 
+  scale_linetype_manual(values=c(6,1), name="") + 
+  xlab("(sub)types") + 
+  ylab("adjusted odds ratio for infection\namong repeat vaccinees\ncompared w/ non-repeats" ) + 
+  theme_bw() +
+  coord_cartesian(ylim=c(0.6, 2)) + 
+  theme(legend.background = element_blank(),
+        legend.title = element_blank())
+
+```
+
+#### SFig4.1: fig 3 sensitivity analyses, parameters that resemble values from high incidence settings
+
+```{r SFig4.1, fig.height=3.2, fig.width=9}
+
+bseq <- seq(0,1,0.01)
+plotdata <- NULL
+for(alpha1 in c(0.3,0.5,0.7)){
+  for(OR1 in seq(0.6,1.4,0.1)){
+    tmp <- subcln(alpha=alpha1, gamma_theta=0.05, OR=OR1, b=bseq, a=0.03, x=0.06)
+    tmpdata <- data.frame(y=tmp,alpha1,OR1,bseq)
+    plotdata <- rbind(tmpdata,plotdata)
+  }
+}
+  
+plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
+  mutate(ratio=y/bseq, diff=y-bseq)
+  
+plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.5,y<1,y>0,bseq>0,bseq<1,OR1>=0.8&OR1<=1.3) 
+  ) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.7,y<1,y>0,bseq>0,bseq<1,OR1>=0.8&OR1<=1.3) 
+  ) %>%
+  mutate(alpha1 = recode(as.character(alpha1), "0.3"="70%", "0.5"="50%", "0.7"="30%")) %>%
+  mutate(OR1 = recode(OR1, "1.1" = "1.1 *")) %>%
+  mutate(OR1 = factor(OR1, levels = c("1.3","1.2","1.1 *","1","0.9","0.8","0.7"))) %>%
+  ggplot(aes(x=bseq, y=y)) + 
+  geom_path(aes(col=OR1, size=OR1)) +
+  scale_size_manual(values = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
+                    name="OR for infection\namong repeat\nvs.non-repeats") +
+  theme_bw() + 
+  facet_grid(col=vars(alpha1)) +
+  scale_color_manual(values = rev(c("#e5f5e0","#c7e9c0","#a1d99b","#74c476","#beaed4","#41ab5d","#238b45")
+), name="OR for infection\namong repeat\nvs.non-repeats") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who were\nsublinically infected previous season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+```
+
+
+
+```{r  fig.height=3, fig.width=9, eval=F}
+#vary gamma_theta 
+bseq <- seq(0,1,0.01)
+plotdata <- NULL
+for(gamma_theta in c(0.03,0.06,0.09)){
+  for(OR1 in seq(0.6,1.4,0.1)){
+    tmp <- subcln(alpha=0.5, gamma_theta=gamma_theta, OR=OR1, b=bseq, a=0.04, x=0.08)
+    tmpdata <- data.frame(y=tmp,gamma_theta,alpha1,OR1,bseq)
+    plotdata <- rbind(tmpdata,plotdata)
+  }
+}
+  
+plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
+  mutate(ratio=y/bseq, diff=y-bseq)
+
+
+plotdata %>% filter(gamma_theta==0.03,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
+  bind_rows(
+    plotdata %>% filter(gamma_theta==0.06,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3)
+  ) %>%
+  bind_rows(
+    plotdata %>% filter(gamma_theta==0.09,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+  ) %>%
+  ggplot(aes(x=bseq,y=y)) + 
+  geom_path(aes(col=OR1), size=1)+
+  theme_bw() + 
+  facet_grid(col=vars(gamma_theta)) +
+  scale_color_brewer(palette="Spectral", 
+                     name="OR for infection\namong repeat\nvs.non-repeats") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected last season") + 
+  ylab("fraction of non-repeat vaccinees\nwho were sublinically infected last season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  scale_color_brewer(palette="Spectral", 
+                     name="OR for infection\namong repeat\nvs.non-repeats") +
+  theme(plot.title = element_text(size = 10)) + 
+            geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+```
+
+#### SFig 4.2
+
+```{r SFig4.2, fig.height=3.2, fig.width=9}
+
+##' Function that outputs the fraction of non-repeat vaccinees who were subclinically infected in the last season
+##' solve O=((b*alpha+(1-a-b))/(1/t-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/t-y*alpha-(1-x-y)))  for alpha
+##'
+##' @param b subclinical attack rate among vaccinees
+##' @param a clinical attack rate among vaccinees
+##' @param x clinical attack rate among unvaccinated individuals
+##' @param y subclinical attack rate among unvaccinated individuals
+##' @param gamma_theta current season AR among those not infected (clinically or subclinically) last season
+##' @param OR Odds ratio for infection among repeat vaccinees compared with non-repeat vaccinees
+##'
+##' @return alpha*gamma_plus/gamma
+##' 
+getalpha <- function(a,b,x,y,gamma_theta,OR=1.1){
+  (-sqrt((-a *OR* gamma_theta *y + a *gamma_theta* y - b *OR* gamma_theta* x - 2 *b* OR* gamma_theta* y + b *OR* gamma_theta + b *gamma_theta* x + 2* b* gamma_theta* y - b* gamma_theta + b + OR* gamma_theta* y - OR *y - gamma_theta *y)^2 - 4* (b* OR* gamma_theta *y - b *gamma_theta* y)* (a *OR* gamma_theta* x + a* OR* gamma_theta* y + a* (-OR)* gamma_theta - a *gamma_theta* x - a* gamma_theta* y + a* gamma_theta - a + b *OR* gamma_theta* x + b *OR* gamma_theta* y - b *OR *gamma_theta - b *gamma_theta* x - b* gamma_theta* y + b* gamma_theta - b - OR *gamma_theta* x - OR* gamma_theta *y + OR* gamma_theta + OR* x + OR *y - OR + gamma_theta *x + gamma_theta *y - gamma_theta + 1)) + a *OR* gamma_theta* y - a *gamma_theta* y + b* OR* gamma_theta *x + 2* b *OR *gamma_theta* y + b* (-OR) *gamma_theta - b *gamma_theta* x - 2 *b *gamma_theta *y + b* gamma_theta - b - OR *gamma_theta *y + OR* y + gamma_theta* y)/(2* b* (OR - 1) *gamma_theta* y)
+}
+
+
+
+
+plotdata_img <- NULL
+for (b in seq(0,0.5,0.005)){
+  for (y in seq(0,0.5,0.005)+b){
+    new_alpha <- getalpha(gamma_theta=0.015, a=0.01, b=b, x=0.02, y=y, OR=1.1)
+    tmpdata <- data.frame(y=y,b=b,new_alpha)
+    plotdata_img <- rbind(tmpdata,plotdata_img)
+  }
+}
+
+plotdata_img %>%
+  mutate(VE = 0.5, alpha = 0.3) %>%
+  bind_rows(
+    plotdata_img %>%
+    mutate(VE = 0.5, alpha = 0.5)
+    ) %>%
+  bind_rows(
+    plotdata_img %>%
+    mutate(VE = 0.5, alpha = 0.7)
+    ) %>%
+  mutate(
+    gamma = 1-VE,
+    delta_VE = gamma*(1-new_alpha/alpha)
+    ) %>%
+  filter(delta_VE<0.5, delta_VE>0,
+         y<=0.5, y>0, b<=0.5, b>0) %>% 
+  mutate(alpha = recode(as.character(alpha), "0.3"="70%", "0.5"="50%", "0.7"="30%")) %>%
+  ggplot(aes(x=b,y=y)) + 
+  geom_point(aes(col=delta_VE), size=1.5)+
+  theme_bw() + 
+  facet_grid(col=vars(alpha)) +
+  scale_color_gradient2(name="increase in\noverall VE", low="#8c510a",mid="lightgrey",high="#01665e") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who were\nsublinically infected previous season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+```
+
+
+
+```{r  fig.height=3, fig.width=9, eval=F}
+
+#vary gamma_theta 
+
+bseq <- seq(0,1,0.01)
+plotdata <- NULL
+for(gamma_theta in c(0.03,0.05,0.09)){
+  for(OR1 in seq(0.6,1.4,0.1)){
+    tmp <- subcln(alpha=0.5, gamma_theta=gamma_theta, OR=OR1, b=bseq,a=0.01, x=0.02)
+    tmpdata <- data.frame(y=tmp,gamma_theta,alpha1,OR1,bseq)
+    plotdata <- rbind(tmpdata,plotdata)
+  }
+}
+  
+plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
+  mutate(ratio=y/bseq, diff=y-bseq) 
+  
+plotdata %>% filter(gamma_theta==0.03,y<1,y>0,bseq>0,bseq<1,OR1>=0.8) %>%
+  bind_rows(
+    plotdata %>% filter(gamma_theta==0.05,y<1,y>0,bseq>0,bseq<1,OR1>=0.8) 
+  ) %>%
+  bind_rows(
+    plotdata %>% filter(gamma_theta==0.09,y<1,y>0,bseq>0,bseq<1,OR1>=0.8)
+  )  %>% ggplot(aes(x=bseq,y=y)) + 
+  geom_path(aes(col=OR1), size=1)+
+  theme_bw() + 
+  facet_grid(col=vars(gamma_theta)) +
+  scale_color_brewer(palette="Spectral", 
+                     name="OR for infection\namong repeat\nvs.non-repeats") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected last season") + 
+  ylab("fraction of non-repeat vaccinees\nwho were sublinically infected last season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  theme(plot.title = element_text(size = 10)) + 
+            geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+```
+
+#### SFig5.1
+
+```{r sfig5.1}
+##'
+##' @param beta 1 − β is the effectiveness of clinical infections that occurred in the previous season against clinical infection in the current season
+##' @param gamma_theta current season AR among those not infected (clinically or subclinically) last season
+##' @param a clinical attack rate among vaccinees
+##' @param b subclinical attack rate among vaccinees
+##' @param x clinical attack rate among unvaccinated individuals
+##' @param y subclinical attack rate among unvaccinated individuals
+##' @return OR
+get_OR <- function(beta, gamma_theta, a=0.01, x=0.02, b, y, alpha = 0){
+((a * beta + b*alpha + 1-a-b) / (1/gamma_theta - a * beta - b*alpha - (1-a-b))) /
+((x * beta + y*alpha +  1-x-y ) / (1/gamma_theta - x * beta - y*alpha - (1-x-y)))
+}
+# # assume b=0 (no one was subclinically infected)
+# # made the same assumption of gamma_theta, a, and x as in figure 3
+# # changing beta has little effect on OR
+# beta_seq <- seq(0,1,0.05)
+# OR1 <- get_OR(beta = beta_seq, gamma_theta=0.015, a=0.01, x=0.02, b=0, y=0)#, b = fig4input$bseq, y = fig4input$y)
+# data.frame(beta=beta_seq, OR=OR1) %>%
+# ggplot(aes(x=1-beta,y=OR)) +
+# geom_path() +
+# theme_bw()
+# assume a certain proportion of current season vaccinees were subclinical infected last season, b!=0
+# made the same assumption of gamma_theta, a, and x as in figure 3
+# one grid one alpha
+# vary y and b
+grid0 <- expand.grid(beta=seq(0,1,0.01),
+b = seq(0,0.4,0.2),
+y_b = seq(0,0.5,0.1),
+#y = seq(0.2,0.5,0.01),
+alpha = c(0.3,0.5,0.7),
+OR=NA)
+grid0$y <- grid0$b+grid0$y_b
+for (i in 1:nrow(grid0)){
+grid0$OR[i] <- get_OR(beta = grid0$beta[i], gamma_theta=0.015, a=0.01, x=0.02,
+b = grid0$b[i], y = grid0$y[i], alpha = grid0$alpha[i])
+}
+#plot(beta_seq, OR2, ylim=c(1.08,1.12))
+grid0 %>% filter(y <= 0.5) %>%
+mutate(alpha = paste("alpha=",alpha,sep=""),
+b = paste("b=",b,sep="")) %>%
+mutate(y=as.character(y)) %>%
+ggplot(aes(x=1-beta, y=OR)) +
+geom_path(aes(col=y), size=1.5) +
+theme_bw() +
+facet_grid(col=vars(alpha), row=vars(b)) +
+scale_color_manual(values=c("#bfd3e6","#9ebcda","#8c96c6","#8856a7","#810f7c","#6e016b")) +
+xlab("effectiveness of prior-season clinical infection\nagainst current-season clinical infection") +
+ylab("odds ratio of clinical infection\ncomparing repeat vs. non-repeat vaccinees")
+
+```
+
