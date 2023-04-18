@@ -304,8 +304,9 @@ get_output_glm_mf <- function(dat_t1, all_seasons_mf){
 
 # main analyses
 output_glm_mf <- get_output_glm_mf(
-  msm_long %>% filter(time==1)  %>% filter(!year %in% c("2008","2009Pan","2010")), 
-  unique(msm_long  %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+  msm_long %>% filter(time==1) %>% filter(!year %in% c("2008","2009Pan","2010")), 
+  unique(msm_long  %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
   )
 
 # sensitivity analyses: exclude data from those who refused enrollment in the previous season 
@@ -420,12 +421,13 @@ get_output_msm_nowaning <- function(dat, all_seasons_mf){
   return(out)
 }
 
-# data for the main analyses
-output_msm_nowanings <- get_output_msm_nowaning(
-  msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
-    filter( (vd1_WEEK_shift < first_case_week)|is.na(vd1_WEEK_shift)), 
-  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
-)
+# # data for the main analyses
+# output_msm_nowanings <- get_output_msm_nowaning(
+#   msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
+#     filter( (vd1_WEEK_shift < first_case_week)|is.na(vd1_WEEK_shift)), 
+#   unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+# )
+
 
 output_msm_nowanings_refused_incl <- get_output_msm_nowaning(
   msm_long %>% 
@@ -434,7 +436,8 @@ output_msm_nowanings_refused_incl <- get_output_msm_nowaning(
     filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
     filter(!year %in% c("2008","2009Pan","2010")) %>%
     filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
-  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
 )
 
 
@@ -547,7 +550,8 @@ output_msm_wanings_refused_incl <- get_output_msm_waning(
     filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
     filter(!year %in% c("2008","2009Pan","2010")) %>%
     filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
-  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
 )
 
 ##' (figure Sfig3.2)
@@ -594,5 +598,6 @@ get_output_glm_mf_lastinf_heterotype <- function(dat_t1, all_seasons_mf){
 
 output_glm_mf_lastinf_heterotype <- get_output_glm_mf_lastinf_heterotype(
   msm_long %>% filter(time==1) %>% filter(!year %in% c("2008")),
-  unique(msm_long %>% filter(!year %in% c("2008")) %>% pull(year))
+  unique(msm_long %>% filter(!year %in% c("2008")) %>% 
+           pull(year))
   )
