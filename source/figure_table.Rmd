@@ -340,7 +340,7 @@ fig2c + plot_annotation(tag_levels = 'A') #+ plot_layout(widths =  7,6
 
 #### Plot Fig 3: Impact of subclinical infection
 
-```{r Fig3, fig.height=3.2, fig.width=9}
+```{r Fig3, fig.height=3.5, fig.width=7}
 
 ##' A function that outputs the fraction of non-repeat vaccinees who were subclinically infected in the last season
 ##' solve O=((b*alpha+(1-a-b))/(1/gamma_theta-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/gamma_theta-y*alpha-(1-x-y))) for y in Wolfram
@@ -361,46 +361,88 @@ subcln <- function(alpha, gamma_theta, OR, a=0.01, x=0.02, b){
 ## assemble a dataset of y, alpha, OR, and b
 bseq <- seq(0,1,0.01)
 plotdata <- NULL
+OR1 <- 1.1
 for(alpha1 in c(0.3,0.5,0.7)){
-  for(OR1 in seq(0.6,1.4,0.1)){
-    tmp <- subcln(alpha=alpha1, gamma_theta=0.015, OR=OR1, b=bseq, a=0.01, x=0.02)
-    tmpdata <- data.frame(y=tmp,alpha1,OR1,bseq)
-    plotdata <- rbind(tmpdata,plotdata)
-  }
+  tmp <- subcln(alpha=alpha1, gamma_theta=0.015, OR=OR1, b=bseq, a=0.01, x=0.02)
+  tmpdata <- data.frame(y=tmp,alpha1,OR1,bseq)
+  plotdata <- rbind(tmpdata,plotdata)
 }
   
-plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
-  mutate(ratio=y/bseq, diff=y-bseq)
+plotdata <- plotdata %>% mutate(ratio=y/bseq, diff=y-bseq)
 
 
 
-plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
+plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1) %>%
   bind_rows(
-    plotdata %>% filter(alpha1==0.5,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+    plotdata %>% filter(alpha1==0.5,y<1,y>0,bseq>0,bseq<1) 
   ) %>%
   bind_rows(
-    plotdata %>% filter(alpha1==0.7,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+    plotdata %>% filter(alpha1==0.7,y<1,y>0,bseq>0,bseq<1) 
   ) %>%
   mutate(alpha1 = recode(as.character(alpha1), "0.3"="70%", "0.5"="50%", "0.7"="30%")) %>%
-  mutate(OR1 = recode(OR1, "1.1" = "1.1 *")) %>%
-  mutate(OR1 = factor(OR1, levels = c("1.3","1.2","1.1 *","1","0.9","0.8","0.7"))) %>%
   ggplot(aes(x=bseq, y=y)) + 
-  geom_path(aes(col=OR1, size=OR1)) +
-  scale_size_manual(values = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
-                    name="OR for infection\namong repeat\nvs.non-repeats") +
+  geom_path(aes(col=alpha1), size=1) +
   theme_bw() + 
-  facet_grid(col=vars(alpha1)) +
-  scale_color_manual(values = rev(c("#e5f5e0","#c7e9c0","#a1d99b","#74c476","#beaed4","#41ab5d","#238b45")
-), name="OR for infection\namong repeat\nvs.non-repeats") +
-  xlab("fraction of repeat vaccinees\nwho were sublinically infected previous season") + 
-  ylab("fraction of non-repeat vaccinees who were\nsublinically infected previous season") +
+  scale_color_manual(values = rev(c("#41ab5d","#74c476","#a1d99b")), name="effectiveness\nof  subclinical\ninfection") +
+  xlab("fraction of repeat vaccinees who\nwere sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who\nwere sublinically infected previous season") +
   coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
-  geom_abline(slope=1,intercept=0, col="black", lty=3)
+  geom_abline(slope=1,intercept=0, col="black", lty=3) + 
+  theme(legend.position=c(0.75,0.3)) +
+    theme(legend.key.height= unit(0.2, 'cm'),
+        legend.key.width= unit(0.5, 'cm')) -> fig3_1
 
-#plotdata %>% filter(alpha1==0.5, OR1==1.1, bseq==0.2) -> fig4input
+
+##' Function that outputs alpha*gamma_plus/gamma
+##' solve O=((b*alpha+(1-a-b))/(1/t-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/t-y*alpha-(1-x-y)))  for alpha
+##'
+##' @param b subclinical attack rate among vaccinees
+##' @param a clinical attack rate among vaccinees
+##' @param x clinical attack rate among unvaccinated individuals
+##' @param y subclinical attack rate among unvaccinated individuals
+##' @param gamma_theta current season AR among those not infected (clinically or subclinically) last season
+##' @param OR Odds ratio for infection among repeat vaccinees compared with non-repeat vaccinees
+##'
+##' @return alpha*gamma_plus/gamma ... for computing delta_VE 
+##' 
+getalpha <- function(a,b,x,y,gamma_theta,OR=1.1){
+  (-sqrt((-a *OR* gamma_theta *y + a *gamma_theta* y - b *OR* gamma_theta* x - 2 *b* OR* gamma_theta* y + b *OR* gamma_theta + b *gamma_theta* x + 2* b* gamma_theta* y - b* gamma_theta + b + OR* gamma_theta* y - OR *y - gamma_theta *y)^2 - 4* (b* OR* gamma_theta *y - b *gamma_theta* y)* (a *OR* gamma_theta* x + a* OR* gamma_theta* y + a* (-OR)* gamma_theta - a *gamma_theta* x - a* gamma_theta* y + a* gamma_theta - a + b *OR* gamma_theta* x + b *OR* gamma_theta* y - b *OR *gamma_theta - b *gamma_theta* x - b* gamma_theta* y + b* gamma_theta - b - OR *gamma_theta* x - OR* gamma_theta *y + OR* gamma_theta + OR* x + OR *y - OR + gamma_theta *x + gamma_theta *y - gamma_theta + 1)) + a *OR* gamma_theta* y - a *gamma_theta* y + b* OR* gamma_theta *x + 2* b *OR *gamma_theta* y + b* (-OR) *gamma_theta - b *gamma_theta* x - 2 *b *gamma_theta *y + b* gamma_theta - b - OR *gamma_theta *y + OR* y + gamma_theta* y)/(2* b* (OR - 1) *gamma_theta* y)
+}
+
+
+plotdata_img <- NULL
+for (b in seq(0,0.5,0.005)){
+  for (y in seq(0,0.5,0.005)+b){
+    new_alpha <- getalpha(gamma_theta=0.015, a=0.01, b=b, x=0.02, y=y, OR=1.1)
+    tmpdata <- data.frame(y=y,b=b,new_alpha)
+    plotdata_img <- rbind(tmpdata,plotdata_img)
+  }
+}
+
+plotdata_img %>%
+  mutate(VE = 0.5, 
+         alpha = 0.7,
+         gamma = 1-VE,
+         delta_VE = gamma*(1-new_alpha/alpha) #  gamma - gamma+
+    ) %>%
+  filter(delta_VE<0.5, delta_VE>0,
+         y<=0.5, y>0, b<=0.5, b>0) %>% 
+  ggplot(aes(x=b,y=y)) + 
+  geom_point(aes(col=delta_VE), size=1.5)+
+  theme_bw() + 
+  scale_color_gradient2(name="increase in\noverall VE", low="#8c510a",mid="lightgrey",high="blue") +
+  xlab("fraction of repeat vaccinees who\nwere sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who\nwere sublinically infected previous season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  geom_abline(slope=1,intercept=0, col="black", lty=3) +
+  theme(legend.position=c(0.8,0.35)) +
+    theme(legend.key.height= unit(0.4, 'cm'),
+        legend.key.width= unit(0.5, 'cm')) -> fig3_2
+
+
+fig3_1 + fig3_2 + plot_annotation(tag_levels = 'A')
 
 ```
-
 
 ## Supplementary material
 
@@ -1151,9 +1193,72 @@ rbind(
 
 ```
 
-#### SFig5.1: Similar to Fig 3 but using parameters that resemble values from high incidence settings
 
-```{r SFig5.1, fig.height=3.2, fig.width=9}
+
+#### SFig 5.1: Test the infection block hypothesis
+
+```{r Fig5.1, fig.height=3.2, fig.width=9}
+
+##' A function that outputs the fraction of non-repeat vaccinees who were subclinically infected in the last season
+##' solve O=((b*alpha+(1-a-b))/(1/gamma_theta-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/gamma_theta-y*alpha-(1-x-y))) for y in Wolfram
+##'
+##' @param b subclinical attack rate among vaccinees
+##' @param a clinical attack rate among vaccinees
+##' @param x clinical attack rate among unvaccinated individuals
+##' @param gamma_theta current season AR among those not infected (clinically or subclinically) last season
+##' @param alpha protection conferred by subclinical infections
+##' @param OR Odds ratio for clinical infection among repeat vaccinees compared with non-repeat vaccinees
+##'
+##' @return y fraction of non-repeat vaccinees who were subclinically infected in the prior season
+##' 
+subcln <- function(alpha, gamma_theta, OR, a=0.01, x=0.02, b){
+ (a* gamma_theta* (OR *(-x) + OR + x - 1) + a + (alpha - 1)* b* (gamma_theta* (OR - 1)* (x - 1) - 1) + gamma_theta - gamma_theta* OR + gamma_theta* OR *x - OR* x + OR - gamma_theta* x - 1)/((alpha - 1) *(gamma_theta* (a - alpha* b + b - 1) + OR *(gamma_theta*  (-(a - alpha* b + b - 1)) - 1)))
+}
+
+## assemble a dataset of y, alpha, OR, and b
+bseq <- seq(0,1,0.01)
+plotdata <- NULL
+for(alpha1 in c(0.3,0.5,0.7)){
+  for(OR1 in seq(0.6,1.4,0.1)){
+    tmp <- subcln(alpha=alpha1, gamma_theta=0.015, OR=OR1, b=bseq, a=0.01, x=0.02)
+    tmpdata <- data.frame(y=tmp,alpha1,OR1,bseq)
+    plotdata <- rbind(tmpdata,plotdata)
+  }
+}
+  
+plotdata <- plotdata %>% mutate(OR1=as.character(OR1)) %>% 
+  mutate(ratio=y/bseq, diff=y-bseq)
+
+
+
+plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.5,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+  ) %>%
+  bind_rows(
+    plotdata %>% filter(alpha1==0.7,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) 
+  ) %>%
+  mutate(alpha1 = recode(as.character(alpha1), "0.3"="70%", "0.5"="50%", "0.7"="30%")) %>%
+  mutate(OR1 = recode(OR1, "1.1" = "1.1 *")) %>%
+  mutate(OR1 = factor(OR1, levels = c("1.3","1.2","1.1 *","1","0.9","0.8","0.7"))) %>%
+  ggplot(aes(x=bseq, y=y)) + 
+  geom_path(aes(col=OR1, size=OR1)) +
+  scale_size_manual(values = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
+                    name="OR for infection\namong repeat\nvs.non-repeats") +
+  theme_bw() + 
+  facet_grid(col=vars(alpha1)) +
+  scale_color_manual(values = rev(c("#e5f5e0","#c7e9c0","#a1d99b","#74c476","#beaed4","#41ab5d","#238b45")
+), name="OR for infection\namong repeat\nvs.non-repeats") +
+  xlab("fraction of repeat vaccinees\nwho were sublinically infected previous season") + 
+  ylab("fraction of non-repeat vaccinees who were\nsublinically infected previous season") +
+  coord_cartesian(ylim=c(0, 0.5), xlim=c(0,0.5)) +
+  geom_abline(slope=1,intercept=0, col="black", lty=3)
+
+```
+
+#### SFig5.2: Similar to Fig 5.1 but using parameters that resemble values from high incidence settings
+
+```{r SFig5.2, fig.height=3.2, fig.width=9}
 
 bseq <- seq(0,1,0.01)
 plotdata <- NULL
@@ -1193,9 +1298,11 @@ plotdata %>% filter(alpha1==0.3,y<1,y>0,bseq>0,bseq<1,OR1>=0.7&OR1<=1.3) %>%
 
 ```
 
-#### SFig 5.2: Test the enhanced vaccine immunogenicity hypothesis
 
-```{r SFig5.2, fig.height=3.2, fig.width=9}
+
+#### SFig 5.3: Test the enhanced vaccine immunogenicity hypothesis
+
+```{r SFig5.3, fig.height=3.2, fig.width=9}
 
 ##' Function that outputs the fraction of non-repeat vaccinees who were subclinically infected in the last season
 ##' solve O=((b*alpha+(1-a-b))/(1/t-b*alpha-(1-a-b)))/((y*alpha+(1-x-y))/(1/t-y*alpha-(1-x-y)))  for alpha
