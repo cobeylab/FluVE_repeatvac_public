@@ -36,9 +36,6 @@ get_waning_glm_0117 <- function(model_output){
   exp(cbind(coef(model_output),confint.default(model_output))[coef_index,])
 }
 
-#filter_type_by_season <- unique(dat1_nofil[,c("SEASON","H3N2_dom","B_year")]) %>% 
-#  mutate(SEASON = as.character(SEASON))
-
 ##'
 get_se_coef2 <- function(model_output){
   coef_index1 <- which(names(coef(model_output))=="RES_any")
@@ -380,53 +377,61 @@ output_glm_mf_lastinf_sametype_refused_incl <- get_output_glm_mf_lastinf_sametyp
 )
 
 
-##' MSM model output
-##' no waning in weighted outcome model
-get_output_msm_nowaning <- function(dat, all_seasons_mf){
-  out <- list()
-  for (var in c("RES_B", "RES_H1", "RES_H3")){
-    var_index <- which(names(dat) == var)
-    dat_index <- dat[,var_index] <= 1
-    dat_short <- dat[dat_index,]
-    model <- NULL
-    cond_stabilized <- ipwtm(
-      exposure = vac,
-      family = "binomial",
-      link = "logit",
-      numerator = ~ lag_vac + time + age_cat_5 + HR + gender,
-      denominator = ~ lag_vac*inf_pastseason + time + age_cat_5 + HR + gender + year,
-      id = studyid,
-      timevar = time,
-      type = "all",
-      data = as.data.frame(dat_short)
-    )
-    dat_short$cond_stab_weight <- cond_stabilized$ipw.weights
-    model <- glm(as.formula(paste(var,"~ age_cat_5 + gender + HR + vac_group")), 
-                 weights = cond_stab_weight,
-                 family="binomial",
-                 data = dat_short %>% filter(time == 1))
-    if(var=="RES_B"){
-      out$B_MSM <- model
-      out$B_MSM_weights <-  cond_stabilized$ipw.weights
-    }
-    if(var=="RES_H3"){
-      out$H3_MSM <- model
-      out$H3_MSM_weights <-  cond_stabilized$ipw.weights
-    }
-    if(var=="RES_H1"){
-      out$H1_MSM <- model
-      out$H1_MSM_weights <-  cond_stabilized$ipw.weights
-    }
+##' IP weighted logistic regression model output
+##' no adjustment for waning in the weighted outcome model
+get_output_msm_nowaning <- function(dat, var, n=1000, all_seasons_mf){
+  var_index <- which(names(dat) == var)
+  dat_index <- dat[,var_index] <= 1
+  dat_short <- dat[dat_index,]
+  
+  # sanity check..max one clinical infection per season
+  #dat_short %>% filter(time==1) -> tmp
+  #table(duplicated(tmp[,c("studyid","year")]))
+  
+  # create unique indicators for each studyid and year combination
+  dat_short$studyid_year <- cumsum(!duplicated(dat_short[,c("studyid","year")]))
+  dat_short_t1 <- dat_short %>% filter(time==1) 
+  dat_short_t0 <- dat_short %>% filter(time==0) 
+  
+  bootid <- matrix(ncol=n, nrow=max(dat_short$studyid_year))
+  set.seed(111)
+  for (i in 1:n){
+    bootid[,i] <- sample(1:max(dat_short$studyid_year), replace=T)
   }
-  return(out)
+  output <- NULL
+  for (i in 1:n){
+    print(i)
+    dat_short_resampled_t1 <- dat_short_t1[bootid[,i],]
+    dat_short_resampled_t1$studyid_year_post_bootstrap <- 1:nrow(dat_short_resampled_t1)
+    dat_short_resampled_t0 <- dat_short_t0[bootid[,i],]
+    dat_short_resampled_t0$studyid_year_post_bootstrap <- 1:nrow(dat_short_resampled_t0)
+    dat_short_resampled <- rbind(dat_short_resampled_t0, dat_short_resampled_t1) %>%
+      arrange(studyid_year_post_bootstrap, time)
+    # generate weights
+    model <- NULL
+    tryCatch({
+      cond_stabilized <- ipwtm(
+        exposure = vac,
+        family = "binomial",
+        link = "logit",
+        numerator = ~ lag_vac + time + age_cat_5 + HR + gender + year,
+        denominator = ~ lag_vac*inf_pastseason + time + age_cat_5 + HR + gender + year,
+        id = studyid_year,
+        timevar = time,
+        type = "all",
+        data = as.data.frame(dat_short_resampled)
+      )
+      dat_short_resampled$cond_stab_weight <- cond_stabilized$ipw.weights
+      model <- glm(as.formula(paste(var,"~ age_cat_5 + gender + HR + vac_group + year")), 
+                   weights = cond_stab_weight,
+                   family="binomial",
+                   data = dat_short_resampled %>% filter(time == 1))
+      
+      output <- c(output, exp(coef(model)["vac_group11"] - coef(model)["vac_group01"]))
+    }, error = function(e){output <- c(output, NULL); print(paste("error",i))})
+  }
+  return(output)
 }
-
-# # data for the main analyses
-# output_msm_nowanings <- get_output_msm_nowaning(
-#   msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
-#     filter( (vd1_WEEK_shift < first_case_week)|is.na(vd1_WEEK_shift)), 
-#   unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
-# )
 
 
 output_msm_nowanings_refused_incl <- get_output_msm_nowaning(
@@ -442,117 +447,183 @@ output_msm_nowanings_refused_incl <- get_output_msm_nowaning(
 
 
 
-##' MSM model output
-##' adjusted for waning in weighted outcome model
-get_output_msm_waning <- function(dat, all_seasons_mf){
-  out <- list()
-  list_i <- 0
-  list_names <- NULL
-  # results by season
-  for (var in c("RES_B", "RES_H1", "RES_H3")){
-    for (season_i in all_seasons_mf){
-        var_index <- which(names(dat) == var)
-        var_index2 <- which(names(dat) == "year")
-        dat_index <- (dat[,var_index] <=1) & (dat[,var_index2] == season_i)
-        dat_short <- dat[dat_index,]
-        model <- NULL
-        cond_stabilized <- ipwtm(
-          exposure = vac,
-          family = "binomial",
-          link = "logit",
-          numerator = ~ lag_vac + time + age_cat_5 + HR + gender,
-          denominator = ~ lag_vac*inf_pastseason + time + age_cat_5 + HR + gender,
-          id = studyid,
-          timevar = time,
-          type = "all",
-          data = as.data.frame(dat_short)
-        )
-        dat_short$cond_stab_weight <- cond_stabilized$ipw.weights
-        model <- glm(as.formula(paste(var,"~ age_cat_5 + gender + HR + 
-                                  vac_group11 + vac_group10 +  
-                                  time_VAX_to_ONSET_cat_2_9 + time_VAX_to_ONSET_cat_10_13 + 
-                                  time_VAX_to_ONSET_cat_14_17 + time_VAX_to_ONSET_cat_18_21 +
-                                  time_VAX_to_ONSET_cat_22
-                                  ")), 
-                     family="binomial",
-                     data = dat_short %>% filter(time == 1))
-        
-        list_names <- c(list_names, paste(substr(var,5,6), season_i, sep="_"))
-        list_i <- list_i + 1
-        out[[list_i]] <- model
-    }
-  }
-  names(out) <- list_names
+##' IP weighted logistic regression model output
+##' adjusted for waning in the weighted outcome model
+get_output_msm_waning <- function(dat, var, n=1000, all_seasons_mf){
+  var_index <- which(names(dat) == var)
+  dat_index <- dat[,var_index] <= 1
+  dat_short <- dat[dat_index,]
   
-  for (var in c("RES_B", "RES_H1", "RES_H3")){
-    var_index <- which(names(dat) == var)
-    dat_index <- dat[,var_index] <=1
-    dat_short <- dat[dat_index,]
-    model <- NULL
-    cond_stabilized <- ipwtm(
-      exposure = vac,
-      family = "binomial",
-      link = "logit",
-      numerator = ~ lag_vac + time + age_cat_5 + HR + gender,
-      denominator = ~ lag_vac*inf_pastseason + time + age_cat_5 + HR + gender + year,
-      id = studyid,
-      timevar = time,
-      type = "all",
-      data = as.data.frame(dat_short)
-    )
-    dat_short$cond_stab_weight <- cond_stabilized$ipw.weights
-    model <- glm(as.formula(paste(var,"~ age_cat_5 + gender + HR + 
-                                  vac_group11 + vac_group10 +  
-                                  time_VAX_to_ONSET_cat_2_9 + time_VAX_to_ONSET_cat_10_13 + 
-                                  time_VAX_to_ONSET_cat_14_17 + time_VAX_to_ONSET_cat_18_21 +
-                                  time_VAX_to_ONSET_cat_22
-                                  ")), 
-                 family="binomial",
-                 data = dat_short %>% filter(time == 1))
-    if(var=="RES_B"){
-      out$B_MSM <- model
-      out$B_MSM_weights <-  cond_stabilized$ipw.weights
-    }
-    if(var=="RES_H3"){
-      out$H3_MSM <- model
-      out$H3_MSM_weights <-  cond_stabilized$ipw.weights
-    }
-    if(var=="RES_H1"){
-      out$H1_MSM <- model
-      out$H1_MSM_weights <-  cond_stabilized$ipw.weights
-    }
+  # sanity check..max one clinical infection per season
+  #dat_short %>% filter(time==1) -> tmp
+  #table(duplicated(tmp[,c("studyid","year")]))
+  
+  # create unique indicators for each studyid and year combination
+  dat_short$studyid_year <- cumsum(!duplicated(dat_short[,c("studyid","year")]))
+  dat_short_t1 <- dat_short %>% filter(time==1) 
+  dat_short_t0 <- dat_short %>% filter(time==0) 
+  
+  bootid <- matrix(ncol=n, nrow=max(dat_short$studyid_year))
+  set.seed(111)
+  for (i in 1:n){
+    bootid[,i] <- sample(1:max(dat_short$studyid_year), replace=T)
   }
-  return(out)
+  output <- NULL
+  #View(dat_short_resampled %>% select(studyid, year, time, studyid_year, ONSET_MONTH))
+  for (i in 1:n){
+    print(i)
+    dat_short_resampled_t1 <- dat_short_t1[bootid[,i],]
+    dat_short_resampled_t1$studyid_year_post_bootstrap <- 1:nrow(dat_short_resampled_t1)
+    dat_short_resampled_t0 <- dat_short_t0[bootid[,i],]
+    dat_short_resampled_t0$studyid_year_post_bootstrap <- 1:nrow(dat_short_resampled_t0)
+    dat_short_resampled <- rbind(dat_short_resampled_t0, dat_short_resampled_t1) %>%
+      arrange(studyid_year_post_bootstrap, time)
+    # generate weights
+    model <- NULL
+    tryCatch({
+      cond_stabilized <- ipwtm(
+        exposure = vac,
+        family = "binomial",
+        link = "logit",
+        numerator = ~ lag_vac + time + age_cat_5 + HR + gender + year,
+        denominator = ~ lag_vac*inf_pastseason + time + age_cat_5 + HR + gender + year,
+        id = studyid_year,
+        timevar = time,
+        type = "all",
+        data = as.data.frame(dat_short_resampled)
+      )
+      dat_short_resampled$cond_stab_weight <- cond_stabilized$ipw.weights
+      model <- glm(as.formula(paste(var,"~ age_cat_5 + gender + HR + 
+                                   vac_group11 + vac_group10 +  
+                                   time_VAX_to_ONSET_cat_2_9 + time_VAX_to_ONSET_cat_10_13 + 
+                                   time_VAX_to_ONSET_cat_14_17 + time_VAX_to_ONSET_cat_18_21 +
+                                   time_VAX_to_ONSET_cat_22 + year
+                                   ")), 
+                   weights = cond_stab_weight,
+                   family="binomial",
+                   data = dat_short_resampled %>% filter(time == 1))
+    output <- c(output, exp(coef(model)["vac_group11"]))
+    }, error = function(e){output <- c(output, NULL); print(paste("error",i))})
+  }
+  return(output)
 }
 
 
-output_msm_wanings_5pct <- get_output_msm_waning(
+
+output_msm_wanings_5pct_H1 <- get_output_msm_waning(
+  dat = msm_long %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  n = 1000,
+  var = "RES_H1",
+  all_seasons_mf = unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_H1, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_H1.Rds")
+
+output_msm_wanings_5pct_H3 <- get_output_msm_waning(
   msm_long %>% 
     filter(!year %in% c("2008","2009Pan","2010")) %>%
     filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  n = 1000,
+  var = "RES_H3",
   unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
 )
+#saveRDS(output_msm_wanings_5pct_H3, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_H3.Rds")
 
-
-
-output_msm_nowanings_5pct <- get_output_msm_nowaning(
-  msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
+output_msm_wanings_5pct_B <- get_output_msm_waning(
+  msm_long %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
     filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  n = 1000,
+  var = "RES_B",
   unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
 )
+#saveRDS(output_msm_wanings_5pct_B, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_B.Rds")
+
+
+##'SFig 4.3
+##'
+output_msm_nowanings_5pct_B <- get_output_msm_nowaning(
+  dat = msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)),
+  var = "RES_B",
+  n = 150,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_nowanings_5pct_B, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_nowanings_5pct_B.Rds")
+
+
+output_msm_nowanings_5pct_H1 <- get_output_msm_nowaning(
+  dat = msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)),
+  var = "RES_H1",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_nowanings_5pct_H1, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_nowanings_5pct_H1.Rds")
+
+
+output_msm_nowanings_5pct_H3 <- get_output_msm_nowaning(
+  dat = msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)),
+  var = "RES_H3",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_nowanings_5pct_H3, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_nowanings_5pct_H3.Rds")
 
 
 # we want to delete those who have a maari visit but refused enrollment
-output_msm_wanings_refused_incl <- get_output_msm_waning(
+output_msm_wanings_refused_incl_B <- get_output_msm_waning(
   msm_long %>% 
     #filter(refused_lastyear!=1|is.na(refused_lastyear)) %>% 
     mutate(refused_lastyear = replace_na(refused_lastyear, 4)) %>%
     filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
     filter(!year %in% c("2008","2009Pan","2010")) %>%
     filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_B",
+  n = 1000,
   unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
            pull(year))
 )
+#saveRDS(output_msm_wanings_refused_incl_B, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_refused_incl_B.Rds")
+
+output_msm_wanings_refused_incl_H1 <- get_output_msm_waning(
+  msm_long %>% 
+    #filter(refused_lastyear!=1|is.na(refused_lastyear)) %>% 
+    mutate(refused_lastyear = replace_na(refused_lastyear, 4)) %>%
+    filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H1",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
+)
+#saveRDS(output_msm_wanings_refused_incl_H1, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_refused_incl_H1.Rds")
+
+output_msm_wanings_refused_incl_H3 <- get_output_msm_waning(
+  msm_long %>% 
+    #filter(refused_lastyear!=1|is.na(refused_lastyear)) %>% 
+    mutate(refused_lastyear = replace_na(refused_lastyear, 4)) %>%
+    filter(!(maari_year_prior == 1 & refused_lastyear == 1)) %>%
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H3",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
+)
+#saveRDS(output_msm_wanings_refused_incl_H3, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_refused_incl_H3.Rds")
 
 ##' (figure Sfig3.2)
 ##'
@@ -601,3 +672,93 @@ output_glm_mf_lastinf_heterotype <- get_output_glm_mf_lastinf_heterotype(
   unique(msm_long %>% filter(!year %in% c("2008")) %>% 
            pull(year))
   )
+
+
+##' (Sfigure 4.4)
+##' age stratified version of figure 2C
+output_glm_mf_u19 <- get_output_glm_mf(
+  msm_long %>% filter(age_cat_5 %in% c("0-4","5-9","10-19")) %>% 
+    filter(time==1) %>% filter(!year %in% c("2008","2009Pan","2010")), 
+  unique(msm_long  %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
+)
+
+output_glm_mf_o19 <- get_output_glm_mf(
+  msm_long %>% filter(age_cat_5 %in% c("20-64","65+")) %>% 
+    filter(time==1) %>% filter(!year %in% c("2008","2009Pan","2010")), 
+  unique(msm_long  %>% filter(!year %in% c("2008","2009Pan","2010")) %>% 
+           pull(year))
+)
+
+
+output_msm_wanings_5pct_u19_H1 <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("0-4","5-9","10-19")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H1",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_u19_H1, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_u19_H1.Rds")
+
+output_msm_wanings_5pct_u19_H3 <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("0-4","5-9","10-19")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H3",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_u19_H3, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_u19_H3.Rds")
+
+output_msm_wanings_5pct_u19_B <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("0-4","5-9","10-19")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_B",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_u19_B, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_u19_B.Rds")
+
+
+output_msm_wanings_5pct_o19_H1 <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("20-64","65+")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H1",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_o19_H1, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_o19_H1.Rds")
+
+
+
+output_msm_wanings_5pct_o19_H3 <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("20-64","65+")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_H3",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_o19_H3, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_o19_H3.Rds")
+
+
+output_msm_wanings_5pct_o19_B <- get_output_msm_waning(
+  msm_long %>% filter(age_cat_5 %in% c("20-64","65+")) %>% 
+    filter(!year %in% c("2008","2009Pan","2010")) %>%
+    filter( (vd1_WEEK_shift < first_5pct_case_week)|is.na(vd1_WEEK_shift)), 
+  var = "RES_B",
+  n = 1000,
+  unique(msm_long %>% filter(!year %in% c("2008","2009Pan","2010")) %>% pull(year))
+)
+#saveRDS(output_msm_wanings_5pct_o19_B, 
+        file="C:/CobeyLab/FluVE_repeatvac_public/data/output_msm_wanings_5pct_o19_B.Rds")
+
+
